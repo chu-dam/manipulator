@@ -1,0 +1,103 @@
+<mujoco model="rb3_730es_u">
+  <!-- 시뮬레이터 전역 설정 -->
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="2e-3" integrator="implicit" gravity="0 0 -9.81">
+    <flag energy="enable"/>
+  </option>
+
+  <!-- 자산(메시/재질) -->
+  <asset>
+    <material name="black" rgba="0.2 0.2 0.2 1"/>
+    <material name="white" rgba="1.0 1.0 1.0 1"/>
+
+    <!-- 경로는 환경에 맞게 교체하세요 -->
+    <mesh name="link0_mesh" file="/home/kdh/rbpodo_ros2_ws/src/rbpodo_ros2/rbpodo_description/meshes/rb3_730es_u/collision/link0.stl"/>
+    <mesh name="link1_mesh" file="/home/kdh/rbpodo_ros2_ws/src/rbpodo_ros2/rbpodo_description/meshes/rb3_730es_u/collision/link1.stl"/>
+    <mesh name="link2_mesh" file="/home/kdh/rbpodo_ros2_ws/src/rbpodo_ros2/rbpodo_description/meshes/rb3_730es_u/collision/link2.stl"/>
+    <mesh name="link3_mesh" file="/home/kdh/rbpodo_ros2_ws/src/rbpodo_ros2/rbpodo_description/meshes/rb3_730es_u/collision/link3.stl"/>
+    <mesh name="link4_mesh" file="/home/kdh/rbpodo_ros2_ws/src/rbpodo_ros2/rbpodo_description/meshes/rb3_730es_u/collision/link4.stl"/>
+    <mesh name="link5_mesh" file="/home/kdh/rbpodo_ros2_ws/src/rbpodo_ros2/rbpodo_description/meshes/rb3_730es_u/collision/link5.stl"/>
+    <mesh name="link6_mesh" file="/home/kdh/rbpodo_ros2_ws/src/rbpodo_ros2/rbpodo_description/meshes/rb3_730es_u/collision/link6.stl"/>
+  </asset>
+
+  <!-- 기본 설정 -->
+  <default class="main">
+    <geom type="mesh" material="black" group="0"/>
+    <joint type="hinge" armature="1e-3" springdamper="1e-2 50.0"/>
+  </default>
+
+  <worldbody>
+    <geom name="ground" type="plane" pos="0 0 0" size="5 5 0.1" rgba="0.5 0.5 0.5 1" friction="1 0.005 0.0001"/>
+
+    <!-- link0 -->
+    <body name="link0" pos="0 0 0" gravcomp="0">
+      <geom type="mesh" mesh="link0_mesh"/>
+      <!-- link1: joint 'base' @ (0,0,0.1453) with axis 0 0 1 -->
+      <body name="link1" pos="0 0 0.1453" gravcomp="0" childclass="main">
+        <joint name="base" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14"/>
+        <!-- URDF inertial of link1 -->
+        <inertial mass="2.058" pos="0.000101 -0.003241 -0.017587"
+                  fullinertia="0.003 0.003 0.002 0.0 0.0 0.0"/>
+        <geom type="mesh" mesh="link1_mesh"/>
+
+        <!-- link2: joint 'shoulder' origin (0,0,0), axis 0 1 0 -->
+        <body name="link2" pos="0 0 0" gravcomp="0" childclass="main">
+          <joint name="shoulder" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14"/>
+          <inertial mass="4.227" pos="-0.000049 -0.095326 0.121743"
+                    fullinertia="0.075 0.073 0.005 0.0 0.0 0.0"/>
+          <geom type="mesh" mesh="link2_mesh"/>
+
+          <!-- link3: joint 'elbow' origin (0,-0.00645,0.286), axis 0 1 0 -->
+          <body name="link3" pos="0 -0.00645 0.286" gravcomp="0" childclass="main">
+            <joint name="elbow" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14"/>
+            <inertial mass="1.45" pos="-0.0 -0.004 0.026"
+                      fullinertia="0.002 0.002 0.001 0.0 0.0 0.0"/>
+            <geom type="mesh" mesh="link3_mesh"/>
+
+            <!-- link4: joint 'wrist1' origin (0,0,0), axis 0 0 1 -->
+            <body name="link4" pos="0 0 0" gravcomp="0" childclass="main">
+              <joint name="wrist1" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14"/>
+              <inertial mass="1.798" pos="0.0 -0.065 0.264"
+                        fullinertia="0.02 0.018 0.003 0.0 0.0 0.004"/>
+              <geom type="mesh" mesh="link4_mesh"/>
+
+              <!-- link5: joint 'wrist2' origin (0,0,0.344), axis 0 1 0 -->
+              <body name="link5" pos="0 0 0.344" gravcomp="0" childclass="main">
+                <joint name="wrist2" type="hinge" axis="0 1 0" limited="true" range="-3.14 3.14"/>
+                <inertial mass="0.944" pos="0.0 -0.001 0.017"
+                          fullinertia="0.000776694 0.000786695 0.000515123 5.052e-06 -5.306e-06 -1.7419e-05"/>
+                <geom type="mesh" mesh="link5_mesh"/>
+
+                <!-- link6: joint 'wrist3' origin (0,0,0), axis 0 0 1 -->
+                <body name="link6" pos="0 0 0" gravcomp="0" childclass="main">
+                  <joint name="wrist3" type="hinge" axis="0 0 1" limited="true" range="-3.14 3.14"/>
+                  <inertial mass="0.05" pos="-0.001 -0.001 0.068"
+                            fullinertia="2.6302e-05 1.6887e-05 3.5232e-05 -3.4e-07 4.57e-07 1.48e-07"/>
+                  <geom type="mesh" mesh="link6_mesh"/>
+
+                  <!-- tcp: fixed joint in URDF -> 고정 바디로 배치 -->
+                  <body name="tcp" pos="0 0 0.1" gravcomp="0">
+                    <!-- 아주 작은 관성(수치 안정) -->
+                    <inertial mass="0.001" pos="0 0 0" fullinertia="1e-6 1e-6 1e-6 0 0 0"/>
+                    <site name="tcp" pos="0 0 0" size="0.002"/>
+                  </body>
+
+                </body> <!-- link6 -->
+              </body> <!-- link5 -->
+            </body> <!-- link4 -->
+          </body> <!-- link3 -->
+        </body> <!-- link2 -->
+      </body> <!-- link1 -->
+    </body> <!-- link0 -->
+  </worldbody>
+
+  <!-- 구동기: URDF limit(±3.14) 기준. 제어 범위/기어비는 필요에 맞게 조정 -->
+  <actuator>
+    <motor name="base_motor"   joint="base"    ctrllimited="true" ctrlrange="-100 100" gear="1.0"/>
+    <motor name="shoulder_motor" joint="shoulder" ctrllimited="true" ctrlrange="-100 100" gear="1.0"/>
+    <motor name="elbow_motor"  joint="elbow"   ctrllimited="true" ctrlrange="-100 100" gear="1.0"/>
+    <motor name="wrist1_motor" joint="wrist1"  ctrllimited="true" ctrlrange="-100 100" gear="1.0"/>
+    <motor name="wrist2_motor" joint="wrist2"  ctrllimited="true" ctrlrange="-100 100" gear="1.0"/>
+    <motor name="wrist3_motor" joint="wrist3"  ctrllimited="true" ctrlrange="-100 100" gear="1.0"/>
+  </actuator>
+</mujoco>
