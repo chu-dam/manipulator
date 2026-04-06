@@ -15,9 +15,9 @@
 
   <!--
     robot self-collision: OFF
-    robot-ground collision: ON
+    robot-ground/hole/peg collision: ON
     robot geom: contype=1, conaffinity=2
-    ground geom: contype=2, conaffinity=1
+    scene env geom: contype=2, conaffinity=1
   -->
   <default class="main">
     <geom type="mesh" group="0" contype="1" conaffinity="2"/>
@@ -26,7 +26,8 @@
 
   <worldbody>
     <geom name="ground" type="plane" pos="0 0 0" size="5 5 0.1"
-          rgba="0.5 0.5 0.5 1" friction="1 0.005 0.0001"
+          rgba="0.5 0.5 0.5 1"
+          friction="1 0.005 0.0001"
           contype="2" conaffinity="1"/>
 
     <body name="link0" pos="0 0 0">
@@ -80,10 +81,10 @@
                   <joint name="wrist3" axis="0 1 0" range="-3.14 3.14"/>
                   <geom type="mesh" mesh="link6_mesh"/>
 
-                  <!-- =========================
-                       Gripper mount
-                       기존 tcp_frame 위치를 gripper base로 대체
-                       ========================= -->
+                  <!-- =====================================================
+                       Gripper base
+                       기존 tcp_frame 위치를 gripper mount로 사용
+                       ===================================================== -->
                   <body name="gripper_base" pos="0 -0.0967 0">
                     <inertial pos="0 -0.018 0"
                               mass="0.45"
@@ -171,19 +172,20 @@
                             friction="2.0 0.02 0.0002"/>
                     </body>
 
-                    <!-- tool center / tcp -->
-                    <site name="tcp" pos="0 -0.084 0" size="0.006" rgba="1 0 0 0"/>
-                    <site name="grasp_center" pos="0 -0.070 0" size="0.005" rgba="0 1 0 0"/>
-                    <site name="peg_tip_nominal" pos="0 -0.145 0" size="0.004" rgba="0 0 1 0"/>
+                    <!-- =====================================================
+                         Robot-side reference sites
+                         free peg를 잡을 때 기준점으로 사용
+                         hidden 처리
+                         ===================================================== -->
+                    <site name="tcp"
+                          pos="0 -0.070 0"
+                          size="0.0001"
+                          rgba="1 0 0 0"/>
 
-                    <!-- 시각화용 tool axis -->
-                    <geom name="tool_axis_vis"
-                          type="capsule"
-                          fromto="0 -0.020 0   0 -0.145 0"
-                          size="0.0015"
-                          mass="0.001"
-                          rgba="1 0 0 0.25"
-                          contype="0" conaffinity="0"/>
+                    <site name="grasp_center"
+                          pos="0 -0.070 0"
+                          size="0.0001"
+                          rgba="0 1 0 0"/>
                   </body>
                 </body>
               </body>
@@ -208,9 +210,7 @@
     <motor name="wrist2_motor" joint="wrist2" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
     <motor name="wrist3_motor" joint="wrist3" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
 
-    <!-- gripper: position actuator
-         d.ctrl[6] = 0.012  -> open
-         d.ctrl[6] = 0.000  -> close -->
+    <!-- gripper -->
     <position name="gripper_act"
               joint="grip_left"
               ctrllimited="true"

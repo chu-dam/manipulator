@@ -1,4 +1,4 @@
-<mujoco model="rb5 gripper peg-in-hole scene">
+<mujoco model="rb5 gripper pick-and-insert scene">
 
     <include file="rb5_gripper.xml"/>
 
@@ -18,6 +18,10 @@
         <!-- STL is in mm, so scale to meters -->
         <mesh name="hole_13_mesh"
               file="/home/chu/manipulator_control/meshes/hole_13.stl"
+              scale="0.001 0.001 0.001"/>
+
+        <mesh name="peg_mesh"
+              file="/home/chu/manipulator_control/meshes/peg.stl"
               scale="0.001 0.001 0.001"/>
     </asset>
 
@@ -44,18 +48,21 @@
                 pos="0.35 -0.30 0.85"
                 xyaxes="0 -1 0 0 0 1"/>
 
-        <!--
-            hole_13 mesh dimensions:
-            x: -10 ~ 10 mm
-            y:   0 ~ 10 mm
-            z: -10 ~ 10 mm
+        <camera name="pick_closeup"
+                pos="0.45 -0.20 0.65"
+                xyaxes="0 -1 0 0 0 1"/>
 
-            So with pos="0 -0.68 0.10":
-            - hole bottom(back face) is around y = -0.68
-            - hole entry(front face) is around y = -0.67
+        <!-- =========================================================
+             Hole fixture
+             hole_13.stl:
+               x: -10 ~ 10 mm
+               y:   0 ~ 10 mm
+               z: -10 ~ 10 mm
 
-            Robot approaches roughly along -Y direction.
-        -->
+             quat = x축 +90도 회전
+             -> hole 축이 world Z축 방향
+             -> 위에서 아래로 삽입하는 구성
+             ========================================================= -->
         <body name="hole_fixture" pos="0.00 -0.68 0.0" quat="0.70710678 0.70710678 0 0">
             <geom name="hole_13_geom"
                   type="mesh"
@@ -65,11 +72,52 @@
                   conaffinity="1"
                   friction="1.0 0.005 0.0001"/>
 
-            <!-- reference sites -->
-            <site name="hole_bottom"    pos="0 0.000 0" size="0.0035" rgba="0 1 1 0"/>
-            <site name="hole_center"    pos="0 0.005 0" size="0.0035" rgba="1 1 0 0"/>
-            <site name="hole_entry"     pos="0 0.010 0" size="0.0040" rgba="0 1 0 0"/>
-            <site name="hole_preinsert" pos="0 0.030 0" size="0.0050" rgba="1 0 1 0"/>
+            <!-- hidden reference sites -->
+            <site name="hole_bottom"    pos="0 0.000 0" size="0.0001" rgba="0 1 1 0"/>
+            <site name="hole_center"    pos="0 0.005 0" size="0.0001" rgba="1 1 0 0"/>
+            <site name="hole_entry"     pos="0 0.010 0" size="0.0001" rgba="0 1 0 0"/>
+            <site name="hole_preinsert" pos="0 0.030 0" size="0.0001" rgba="1 0 1 0"/>
+        </body>
+
+        <!-- =========================================================
+             Peg stand
+             peg를 세워두기 위한 pedestal
+             top surface z = 0.10 m
+             ========================================================= -->
+        <body name="peg_stand" pos="0.20 -0.42 0.05">
+            <geom name="peg_stand_geom"
+                  type="box"
+                  size="0.018 0.018 0.05"
+                  rgba="0.35 0.35 0.38 1"
+                  contype="2"
+                  conaffinity="1"
+                  friction="1.0 0.005 0.0001"/>
+        </body>
+
+        <!-- =========================================================
+             Free peg
+             peg.stl axis is local +Y (20 mm)
+             quat = x축 +90도 회전
+             -> peg 축이 world +Z 방향
+             -> body origin = peg bottom
+             ========================================================= -->
+        <body name="peg" pos="0.20 -0.42 0.1005" quat="0.70710678 0.70710678 0 0">
+            <freejoint/>
+
+            <geom name="peg_geom"
+                  type="mesh"
+                  mesh="peg_mesh"
+                  mass="0.03"
+                  rgba="0.85 0.75 0.20 1"
+                  contype="1"
+                  conaffinity="2"
+                  friction="1.2 0.01 0.0001"/>
+
+            <!-- hidden peg reference sites -->
+            <!-- body origin = peg bottom -->
+            <site name="peg_base"   pos="0 0.000 0" size="0.0001" rgba="1 0 0 0"/>
+            <site name="peg_center" pos="0 0.010 0" size="0.0001" rgba="0 1 0 0"/>
+            <site name="peg_tip"    pos="0 0.020 0" size="0.0001" rgba="0 0 1 0"/>
         </body>
     </worldbody>
 </mujoco>
