@@ -172,9 +172,9 @@
                     </body>
 
                     <!-- tool center / tcp -->
-                    <site name="tcp" pos="0 -0.084 0" size="0.006" rgba="1 0 0 1"/>
-                    <site name="grasp_center" pos="0 -0.070 0" size="0.005" rgba="0 1 0 1"/>
-                    <site name="peg_tip_nominal" pos="0 -0.145 0" size="0.004" rgba="0 0 1 1"/>
+                    <site name="tcp" pos="0 -0.084 0" size="0.006" rgba="1 0 0 0"/>
+                    <site name="grasp_center" pos="0 -0.070 0" size="0.005" rgba="0 1 0 0"/>
+                    <site name="peg_tip_nominal" pos="0 -0.145 0" size="0.004" rgba="0 0 1 0"/>
 
                     <!-- 시각화용 tool axis -->
                     <geom name="tool_axis_vis"

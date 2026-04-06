@@ -75,7 +75,7 @@ class RB3_tservo_ROS(Node):
         s.t2 = 0.05 #유지시간
             
         #----- Model Define -----
-        model_path="/home/kdh/Desktop/delto/delto_description2/rb3_single/scene_rb3.xml"
+        model_path="/home/chu/manipulator/rb5/scene_rb5.xml"
         s.m = mujoco.MjModel.from_xml_path(model_path)
         s.d = mujoco.MjData(s.m)
 
