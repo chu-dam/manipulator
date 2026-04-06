@@ -36,7 +36,7 @@ def rpy_to_rotmat(roll, pitch, yaw):
     return Rz @ Ry @ Rx
 
 # --------- desired ---------
-desired_xpos_tcp = np.array([0.5, 0.0, 0.4])
+desired_xpos_tcp = np.array([0.0, -0.5, 0.1])
 desired_rpy = np.array([90.0, 0.0, 0.0])  # roll, pitch, yaw 입력
 # -----------------------------
 
@@ -54,19 +54,18 @@ jacr = np.zeros((3, m.nv), dtype=np.float64)
 
 C0 = np.zeros((6,6))
 
+K_a = np.array([50.0, 50.0, 35.0])
+zeta_a = np.array([5.0, 5.0, 4.0])
 
-K_a = np.array([300.0, 300.0, 50.0])  
-zeta_a = np.array([1.0, 1.0, 1.0])
-
-K_o = 30.0
-zeta_o = 3.0
+K_o = np.array([3.0, 3.0, 1.5])
+zeta_o = np.array([0.3, 0.3, 0.2])
 
 with mujoco.viewer.launch_passive(m, d) as viewer:
     t0 = time()
     while viewer.is_running():
         t = time() - t0
 
-        mujoco.mj_step(m, d)
+        
         mujoco.mj_fullM(m, M, d.qM)
 
         qvel_backup = deepcopy(d.qvel)
@@ -105,31 +104,43 @@ with mujoco.viewer.launch_passive(m, d) as viewer:
         # print(f"wo : {w0}")
 
         # Orientation Force
-        F_ori_0 = (K_o * ori_err0) #+ (zeta_o * np.sqrt(K_o) * w0)
+        F_ori_0 = (K_o * ori_err0) + (zeta_o * np.sqrt(K_o) * w0)
 
         # Linear Velocity
         xpos_dot0 = jacp0 @ d.qvel[0:6]
 
         # Linear Force 
-        # numpy의 요소별(Element-wise) 곱셈이 자동으로 적용되어 
-        # X, Y, Z 각 축에 맞는 K_a와 zeta_a 값이 독립적으로 계산됩니다.
-        force0 = (K_a * xpos_err0) + (2 * zeta_a * np.sqrt(K_a) * xpos_dot0)
+        force0  = (K_a * xpos_err0) + (zeta_a * np.sqrt(K_a) * xpos_dot0)
+
+        M0 = M[0:6, 0:6]
+        M0_inv = np.linalg.pinv(M0)
+
+        eps = 1e-6
+        Lambda_inv = jacp0 @ M0_inv @ jacp0.T
+        Lambda_pos = np.linalg.pinv(Lambda_inv + eps * np.eye(3))
+
+        force0_task = Lambda_pos @ force0
+
 
         # Torque (PD + Gravity + Damping + Orientation)
-        torque0 = (- 0 * C0 @ d.qvel[0:6] 
-                   - 1 * jacp0.T @ force0 
-                   + 1 * G[0:6] 
-                   - 0 * jacr0.T @ F_ori_0)
+        torque0 = ( -0 * C0 @ d.qvel[0:6] 
+                    - 1 * jacp0.T @ force0_task
+                    + 1 * G[0:6] 
+                    - 1 * jacr0.T @ F_ori_0)
         # print(f"torque 0 : {torque0}")
         
-        max_torque = 150
+        max_torque = 80
         d.ctrl[0:6] = np.clip(torque0, -max_torque, max_torque)
         # d.qvel[:] = 0
         #print(f"Taget torque : {d.ctrl[0:6]}")
 
         current_tcp_pos = d.site("tcp").xpos
         print(f"Current TCP Position : X={current_tcp_pos[0]:.4f}, Y={current_tcp_pos[1]:.4f}, Z={current_tcp_pos[2]:.4f}")
-        
+        R_err = R_desired.T @ R_current
+        angle_err = np.arccos(np.clip((np.trace(R_err) - 1.0) / 2.0, -1.0, 1.0))
+        print(f"Orientation error [deg]: {np.rad2deg(angle_err):.3f}")
+
+        mujoco.mj_step(m, d)
         viewer.sync()
 
 
