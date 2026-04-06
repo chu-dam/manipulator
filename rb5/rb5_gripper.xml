@@ -1,0 +1,230 @@
+<mujoco model="rb5_850e_gripper">
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" integrator="implicit" gravity="0 0 -9.81"/>
+
+  <asset>
+    <mesh name="link0_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link0.stl"/>
+    <mesh name="link1_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link1.stl"/>
+    <mesh name="link2_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link2.stl"/>
+    <mesh name="link3_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link3.stl"/>
+    <mesh name="link4_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link4.stl"/>
+    <mesh name="link5_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link5.stl"/>
+    <mesh name="link6_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link6.stl"/>
+  </asset>
+
+  <!--
+    robot self-collision: OFF
+    robot-ground collision: ON
+    robot geom: contype=1, conaffinity=2
+    ground geom: contype=2, conaffinity=1
+  -->
+  <default class="main">
+    <geom type="mesh" group="0" contype="1" conaffinity="2"/>
+    <joint type="hinge" damping="0.1" armature="0.001"/>
+  </default>
+
+  <worldbody>
+    <geom name="ground" type="plane" pos="0 0 0" size="5 5 0.1"
+          rgba="0.5 0.5 0.5 1" friction="1 0.005 0.0001"
+          contype="2" conaffinity="1"/>
+
+    <body name="link0" pos="0 0 0">
+      <geom type="mesh" mesh="link0_mesh"/>
+
+      <body name="link1" pos="0 0 0.1692" childclass="main">
+        <inertial pos="5.7e-05 -0.005795 -0.034516"
+                  quat="0.676677 0.181125 -0.183239 0.689729"
+                  mass="4.147"
+                  diaginertia="0.00940157 0.00878691 0.0073332"/>
+        <joint name="base" axis="0 0 1" range="-3.14 3.14"/>
+        <geom type="mesh" mesh="link1_mesh"/>
+
+        <body name="link2" pos="0 0 0" childclass="main">
+          <inertial pos="-3.7e-05 -0.121603 0.212933"
+                    quat="0.999997 0.000348233 7.80187e-05 -0.00223104"
+                    mass="9.633"
+                    diaginertia="0.392214 0.388915 0.0219492"/>
+          <joint name="shoulder" axis="0 1 0" range="-3.14 3.14"/>
+          <geom type="mesh" mesh="link2_mesh"/>
+
+          <body name="link3" pos="0 0 0.425" childclass="main">
+            <inertial pos="2.1e-05 -0.015845 0.202568"
+                      quat="0.999948 0.0100341 -5.40187e-05 -0.00170427"
+                      mass="3.915"
+                      diaginertia="0.11204 0.111832 0.0075271"/>
+            <joint name="elbow" axis="0 1 0" range="-3.14 3.14"/>
+            <geom type="mesh" mesh="link3_mesh"/>
+
+            <body name="link4" pos="0 0 0.392" childclass="main">
+              <inertial pos="5.7e-05 -0.106332 0.025881"
+                        quat="0.986693 0.162394 -0.00142514 0.00799378"
+                        mass="1.452"
+                        diaginertia="0.00162904 0.00160108 0.00118182"/>
+              <joint name="wrist1" axis="0 1 0" range="-3.14 3.14"/>
+              <geom type="mesh" mesh="link4_mesh"/>
+
+              <body name="link5" pos="0 -0.1107 0.1107" childclass="main">
+                <inertial pos="-2.8e-05 -0.025911 -0.004363"
+                          quat="0.812497 0.582798 -0.00662653 0.0123056"
+                          mass="1.454"
+                          diaginertia="0.00163147 0.00160354 0.00118381"/>
+                <joint name="wrist2" axis="0 0 1" range="-3.14 3.14"/>
+                <geom type="mesh" mesh="link5_mesh"/>
+
+                <body name="link6" pos="0 0 0" childclass="main">
+                  <inertial pos="-2e-06 -0.079964 -0.000494"
+                            quat="0.706709 -0.0427371 -0.0387873 0.705146"
+                            mass="0.243"
+                            diaginertia="0.000243707 0.000147897 0.000142261"/>
+                  <joint name="wrist3" axis="0 1 0" range="-3.14 3.14"/>
+                  <geom type="mesh" mesh="link6_mesh"/>
+
+                  <!-- =========================
+                       Gripper mount
+                       기존 tcp_frame 위치를 gripper base로 대체
+                       ========================= -->
+                  <body name="gripper_base" pos="0 -0.0967 0">
+                    <inertial pos="0 -0.018 0"
+                              mass="0.45"
+                              diaginertia="0.00035 0.00030 0.00020"/>
+
+                    <!-- palm -->
+                    <geom name="gripper_palm"
+                          type="box"
+                          pos="0 -0.014 0"
+                          size="0.024 0.014 0.018"
+                          mass="0.30"
+                          rgba="0.18 0.18 0.18 1"
+                          contype="1" conaffinity="2"
+                          friction="1.0 0.005 0.0001"/>
+
+                    <!-- guide block -->
+                    <geom name="gripper_nose"
+                          type="box"
+                          pos="0 -0.038 0"
+                          size="0.012 0.010 0.014"
+                          mass="0.05"
+                          rgba="0.25 0.25 0.25 1"
+                          contype="1" conaffinity="2"
+                          friction="1.0 0.005 0.0001"/>
+
+                    <!-- left finger -->
+                    <body name="left_finger" pos="0.004 -0.052 0">
+                      <joint name="grip_left"
+                             type="slide"
+                             axis="1 0 0"
+                             range="0 0.012"
+                             damping="15"
+                             armature="0.0002"/>
+                      <inertial pos="0 -0.005 0"
+                                mass="0.05"
+                                diaginertia="1.2e-05 1.2e-05 4.0e-06"/>
+
+                      <geom name="left_finger_geom"
+                            type="box"
+                            pos="0 0 0"
+                            size="0.003 0.030 0.010"
+                            mass="0.05"
+                            rgba="0.35 0.35 0.35 1"
+                            contype="1" conaffinity="2"
+                            friction="1.2 0.01 0.0001"/>
+
+                      <geom name="left_pad"
+                            type="box"
+                            pos="-0.0012 -0.006 0"
+                            size="0.0012 0.012 0.008"
+                            mass="0.01"
+                            rgba="0.1 0.1 0.1 1"
+                            contype="1" conaffinity="2"
+                            friction="2.0 0.02 0.0002"/>
+                    </body>
+
+                    <!-- right finger -->
+                    <body name="right_finger" pos="-0.004 -0.052 0">
+                      <joint name="grip_right"
+                             type="slide"
+                             axis="-1 0 0"
+                             range="0 0.012"
+                             damping="15"
+                             armature="0.0002"/>
+                      <inertial pos="0 -0.005 0"
+                                mass="0.05"
+                                diaginertia="1.2e-05 1.2e-05 4.0e-06"/>
+
+                      <geom name="right_finger_geom"
+                            type="box"
+                            pos="0 0 0"
+                            size="0.003 0.030 0.010"
+                            mass="0.05"
+                            rgba="0.35 0.35 0.35 1"
+                            contype="1" conaffinity="2"
+                            friction="1.2 0.01 0.0001"/>
+
+                      <geom name="right_pad"
+                            type="box"
+                            pos="0.0012 -0.006 0"
+                            size="0.0012 0.012 0.008"
+                            mass="0.01"
+                            rgba="0.1 0.1 0.1 1"
+                            contype="1" conaffinity="2"
+                            friction="2.0 0.02 0.0002"/>
+                    </body>
+
+                    <!-- tool center / tcp -->
+                    <site name="tcp" pos="0 -0.084 0" size="0.006" rgba="1 0 0 1"/>
+                    <site name="grasp_center" pos="0 -0.070 0" size="0.005" rgba="0 1 0 1"/>
+                    <site name="peg_tip_nominal" pos="0 -0.145 0" size="0.004" rgba="0 0 1 1"/>
+
+                    <!-- 시각화용 tool axis -->
+                    <geom name="tool_axis_vis"
+                          type="capsule"
+                          fromto="0 -0.020 0   0 -0.145 0"
+                          size="0.0015"
+                          mass="0.001"
+                          rgba="1 0 0 0.25"
+                          contype="0" conaffinity="0"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <!-- 좌우 핑거 동기화 -->
+  <equality>
+    <joint joint1="grip_right" joint2="grip_left" polycoef="0 1 0 0 0"/>
+  </equality>
+
+  <actuator>
+    <!-- arm 6 joints -->
+    <motor name="base_motor" joint="base" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="shoulder_motor" joint="shoulder" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="elbow_motor" joint="elbow" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="wrist1_motor" joint="wrist1" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="wrist2_motor" joint="wrist2" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="wrist3_motor" joint="wrist3" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+
+    <!-- gripper: position actuator
+         d.ctrl[6] = 0.012  -> open
+         d.ctrl[6] = 0.000  -> close -->
+    <position name="gripper_act"
+              joint="grip_left"
+              ctrllimited="true"
+              ctrlrange="0 0.012"
+              kp="2500"
+              forcelimited="true"
+              forcerange="-80 80"/>
+  </actuator>
+
+  <keyframe>
+    <!-- qpos:
+         [base, shoulder, elbow, wrist1, wrist2, wrist3, grip_left, grip_right] -->
+    <key name="home" qpos="0 0 0 0 0 0 0.010 0.010"/>
+    <key name="grip_close" qpos="0 0 0 0 0 0 0.000 0.000"/>
+    <key name="grip_open" qpos="0 0 0 0 0 0 0.012 0.012"/>
+  </keyframe>
+</mujoco>
