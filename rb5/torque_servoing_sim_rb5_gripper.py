@@ -1,5 +1,7 @@
 from time import time
 from copy import deepcopy
+from pathlib import Path
+
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -10,11 +12,14 @@ STATE_APPROACH_DOWN_TO_PEG = 1
 STATE_GRASP = 2
 STATE_LIFT = 3
 STATE_MOVE_PREINSERT = 4
-STATE_ENTRY = 5
-STATE_INSERT = 6
-STATE_RELEASE = 7
-STATE_RETREAT = 8
-STATE_DONE = 9
+STATE_CONTACT_APPROACH = 5
+STATE_HOLE_SEARCH = 6
+STATE_WIGGLE = 7
+STATE_SCREW = 8
+STATE_INSERT_FINAL = 9
+STATE_RELEASE = 10
+STATE_RETREAT = 11
+STATE_DONE = 12
 
 
 def rpy_to_rotmat(roll, pitch, yaw):
@@ -75,6 +80,27 @@ def validate_required_sites(m):
         raise RuntimeError(
             f"필수 site가 없습니다: {missing}\n"
             f"rb5_gripper.xml / scene_rb5_gripper.xml의 site 이름을 확인하세요."
+        )
+
+
+def validate_required_geoms(m):
+    required_geoms = [
+        "left_finger_geom",
+        "right_finger_geom",
+        "peg_geom",
+    ]
+
+    missing = []
+    for name in required_geoms:
+        try:
+            _ = m.geom(name).id
+        except KeyError:
+            missing.append(name)
+
+    if missing:
+        raise RuntimeError(
+            f"필수 geom이 없습니다: {missing}\n"
+            f"rb5_gripper.xml의 geom 이름을 확인하세요."
         )
 
 
@@ -165,9 +191,23 @@ def compute_task_torque(
     return torque0
 
 
-def apply_control(d, torque0, max_torque=80, gripper_cmd=0.012):
+def apply_control(m, d, torque0, state_data, max_torque=80, gripper_cmd_target=0.012):
     d.ctrl[0:6] = np.clip(torque0, -max_torque, max_torque)
-    d.ctrl[6] = gripper_cmd
+
+    current = state_data["gripper_cmd_current"]
+
+    if gripper_cmd_target < current:
+        speed = state_data["gripper_close_speed"]
+    else:
+        speed = state_data["gripper_open_speed"]
+
+    max_delta = speed * m.opt.timestep
+    delta = np.clip(gripper_cmd_target - current, -max_delta, max_delta)
+
+    current = current + delta
+    state_data["gripper_cmd_current"] = current
+
+    d.ctrl[state_data["gripper_act_id"]] = current
 
 
 def get_state_name(state):
@@ -181,10 +221,16 @@ def get_state_name(state):
         return "LIFT"
     elif state == STATE_MOVE_PREINSERT:
         return "MOVE_PREINSERT"
-    elif state == STATE_ENTRY:
-        return "ENTRY"
-    elif state == STATE_INSERT:
-        return "INSERT"
+    elif state == STATE_CONTACT_APPROACH:
+        return "CONTACT_APPROACH"
+    elif state == STATE_HOLE_SEARCH:
+        return "HOLE_SEARCH"
+    elif state == STATE_WIGGLE:
+        return "WIGGLE"
+    elif state == STATE_SCREW:
+        return "SCREW"
+    elif state == STATE_INSERT_FINAL:
+        return "INSERT_FINAL"
     elif state == STATE_RELEASE:
         return "RELEASE"
     elif state == STATE_RETREAT:
@@ -207,89 +253,195 @@ def get_peg_freejoint_addrs(m):
     return qpos_adr, qvel_adr
 
 
+def get_contact_pair_force(m, d, geom_a_id, geom_b_id):
+    wrench = np.zeros(6, dtype=np.float64)
+
+    contact_count = 0
+    normal_force_sum = 0.0
+    total_force_sum = 0.0
+
+    for i in range(d.ncon):
+        con = d.contact[i]
+
+        if hasattr(con, "geom"):
+            g1 = int(con.geom[0])
+            g2 = int(con.geom[1])
+        else:
+            g1 = int(con.geom1)
+            g2 = int(con.geom2)
+
+        pair_match = (
+            (g1 == geom_a_id and g2 == geom_b_id) or
+            (g1 == geom_b_id and g2 == geom_a_id)
+        )
+        if not pair_match:
+            continue
+
+        if con.exclude != 0 or con.efc_address < 0:
+            continue
+
+        mujoco.mj_contactForce(m, d, i, wrench)
+
+        normal_force = abs(wrench[0])
+        total_force = np.linalg.norm(wrench[:3])
+
+        contact_count += 1
+        normal_force_sum += normal_force
+        total_force_sum += total_force
+
+    return contact_count, normal_force_sum, total_force_sum
+
+
 def attach_peg_to_gripper(m, d, state_data):
     """
-    grasp 성공 순간의 상대 위치를 유지하면서
-    peg를 gripper에 붙여서 따라오게 함
+    sim 편의용:
+    grasp 성공 후에는 peg를 gripper에 붙여서 따라오게 함.
+    제어 로직은 현재 peg 좌표를 다시 읽지 않음.
     """
     qpos_adr = state_data["peg_qpos_adr"]
     qvel_adr = state_data["peg_qvel_adr"]
 
     grasp_center_pos = d.site("grasp_center").xpos.copy()
 
-    peg_origin_pos = grasp_center_pos + state_data["peg_body_offset_from_grasp_world"]
+    peg_origin_pos = grasp_center_pos + state_data["peg_body_offset_from_grasp_nominal_world"]
 
     d.qpos[qpos_adr:qpos_adr+3] = peg_origin_pos
-    d.qpos[qpos_adr+3:qpos_adr+7] = state_data["peg_quat_locked"]
+    d.qpos[qpos_adr+3:qpos_adr+7] = state_data["peg_init_quat_world"]
     d.qvel[qvel_adr:qvel_adr+6] = 0.0
 
 
 def set_state(new_state, state_data, d, now):
     state_data["state"] = new_state
     state_data["state_enter_time"] = now
+    state_data["phase_start_pos"] = d.site("grasp_center").xpos.copy()
+
+    # 상태 전이할 때 stall / detect timer 리셋
+    state_data["contact_stall_start_time"] = None
+    state_data["stall_start_time"] = None
+    state_data["hole_found_start_time"] = None
 
     if new_state == STATE_LIFT:
         current_grasp_center = d.site("grasp_center").xpos.copy()
         state_data["lift_target"] = current_grasp_center + np.array([0.0, 0.0, 0.08])
 
     elif new_state == STATE_RELEASE:
-        # release 직전 위치를 유지한 채 gripper open
         state_data["release_target"] = d.site("grasp_center").xpos.copy()
-        state_data["grasped"] = False
+        state_data["release_open_started"] = False
 
     elif new_state == STATE_RETREAT:
         current_grasp_center = d.site("grasp_center").xpos.copy()
         state_data["retreat_target"] = current_grasp_center + np.array([0.0, 0.0, 0.05])
 
 
+def spiral_xy_offset(t, radius_rate, radius_max, omega):
+    r = min(radius_rate * t, radius_max)
+    return np.array([
+        r * np.cos(omega * t),
+        r * np.sin(omega * t),
+        0.0
+    ])
+
+
+def clamp_down_target(start_pos, target_xy, min_z, down_speed, t):
+    p = start_pos.copy()
+    p[0] = target_xy[0]
+    p[1] = target_xy[1]
+    p[2] = max(min_z, start_pos[2] - down_speed * t)
+    return p
+
+
+def compute_tcp_velocity(curr_pos, prev_pos, dt):
+    if dt <= 1e-6:
+        return np.zeros(3)
+    return (curr_pos - prev_pos) / dt
+
+
+def torque_effort_norm(state_data):
+    return np.linalg.norm(state_data["last_tau_cmd"])
+
+
 def maybe_lock_peg(m, d, state_data):
-    """
-    z는 13mm 위에서 잡는 구조이므로
-    x, y 정렬만으로 grasp 성공 판정
-    """
     if state_data["grasped"]:
         return
 
     grasp_center = d.site("grasp_center").xpos.copy()
-    peg_center = d.site("peg_center").xpos.copy()
-    peg_tip = d.site("peg_tip").xpos.copy()
 
-    dx = grasp_center[0] - peg_center[0]
-    dy = grasp_center[1] - peg_center[1]
-    time_in_state = state_data["time_now"] - state_data["state_enter_time"]
+    dx = grasp_center[0] - state_data["peg_grasp_target"][0]
+    dy = grasp_center[1] - state_data["peg_grasp_target"][1]
 
-    if abs(dx) < 0.004 and abs(dy) < 0.004 and time_in_state > 0.35:
-        state_data["grasped"] = True
+    left_count, left_normal, left_total = get_contact_pair_force(
+        m, d,
+        state_data["left_finger_geom_id"],
+        state_data["peg_geom_id"]
+    )
 
-        qpos_adr = state_data["peg_qpos_adr"]
+    right_count, right_normal, right_total = get_contact_pair_force(
+        m, d,
+        state_data["right_finger_geom_id"],
+        state_data["peg_geom_id"]
+    )
 
-        # 현재 peg quaternion 저장
-        peg_quat_locked = d.qpos[qpos_adr+3:qpos_adr+7].copy()
-        state_data["peg_quat_locked"] = peg_quat_locked
+    state_data["left_contact_count"] = left_count
+    state_data["right_contact_count"] = right_count
+    state_data["left_contact_normal"] = left_normal
+    state_data["right_contact_normal"] = right_normal
+    state_data["left_contact_total"] = left_total
+    state_data["right_contact_total"] = right_total
 
-        # grasp 성공 순간의 peg body origin - grasp_center 상대 위치 저장
-        peg_body_pos = d.body("peg").xpos.copy()
-        state_data["peg_body_offset_from_grasp_world"] = peg_body_pos - grasp_center
+    both_sides_touching = (left_count > 0) and (right_count > 0)
+    enough_force = (
+        left_normal >= state_data["grasp_normal_force_threshold"] and
+        right_normal >= state_data["grasp_normal_force_threshold"]
+    )
+    xy_aligned = (
+        abs(dx) < state_data["grasp_xy_tol"] and
+        abs(dy) < state_data["grasp_xy_tol"]
+    )
 
-        # insertion용 offset 저장:
-        # grasp_center target = hole_target + (grasp_center - peg_tip)
-        state_data["grasp_to_peg_tip_offset_world"] = grasp_center - peg_tip
+    success_candidate = both_sides_touching and enough_force and xy_aligned
 
-        print(f"[GRASP] peg locked to gripper | dx={dx:.6f}, dy={dy:.6f}")
+    if success_candidate:
+        if state_data["contact_hold_start"] is None:
+            state_data["contact_hold_start"] = state_data["time_now"]
+
+        hold_time = state_data["time_now"] - state_data["contact_hold_start"]
+
+        if hold_time >= state_data["grasp_contact_hold_time"]:
+            state_data["grasped"] = True
+            state_data["grasp_success_time"] = state_data["time_now"]
+            state_data["grasp_hold_target"] = grasp_center.copy()
+
+            print(
+                f"[GRASP] peg locked | "
+                f"Lcnt={left_count}, Rcnt={right_count}, "
+                f"Lfn={left_normal:.3f}, Rfn={right_normal:.3f}, "
+                f"dx={dx:.6f}, dy={dy:.6f}"
+            )
+    else:
+        state_data["contact_hold_start"] = None
 
 
-def get_target_by_state(d, state, state_data):
-    desired_rpy = np.array([90.0, 0.0, 0.0])
+def get_target_by_state(state_data):
+    base_rpy = np.array([90.0, 0.0, 0.0])
 
-    peg_center = d.site("peg_center").xpos.copy()
-    peg_above = peg_center + np.array([0.0, 0.0, 0.05])
-    peg_pregrasp = peg_center + np.array([0.0, 0.0, 0.013])
+    peg_above = state_data["peg_above_target"]
+    peg_pregrasp = state_data["peg_pregrasp_target"]
+    peg_grasp = state_data["peg_grasp_target"]
 
-    hole_preinsert = d.site("hole_preinsert").xpos.copy()
-    hole_entry = d.site("hole_entry").xpos.copy()
-    hole_bottom = d.site("hole_bottom").xpos.copy()
+    hole_preinsert = state_data["hole_preinsert_world"]
+    hole_entry = state_data["hole_entry_world"]
+    hole_bottom = state_data["hole_bottom_world"]
 
-    offset = state_data["grasp_to_peg_tip_offset_world"]
+    offset = state_data["grasp_to_peg_tip_offset_nominal_world"]
+
+    state = state_data["state"]
+    tau = state_data["time_now"] - state_data["state_enter_time"]
+
+    entry_target = hole_entry + offset
+    bottom_target = hole_bottom + offset
+    preinsert_target = hole_preinsert + offset + np.array([0.0, 0.0, state_data["preinsert_extra_z"]])
+
+    desired_rpy = base_rpy.copy()
 
     if state == STATE_APPROACH_ABOVE_PEG:
         desired_xpos_site = peg_above
@@ -302,7 +454,11 @@ def get_target_by_state(d, state, state_data):
         gripper_cmd = 0.012
 
     elif state == STATE_GRASP:
-        desired_xpos_site = peg_pregrasp
+        if state_data["grasped"]:
+            desired_xpos_site = state_data["grasp_hold_target"].copy()
+        else:
+            desired_xpos_site = peg_grasp
+
         control_site_name = "grasp_center"
         gripper_cmd = 0.000
 
@@ -312,17 +468,67 @@ def get_target_by_state(d, state, state_data):
         gripper_cmd = 0.000
 
     elif state == STATE_MOVE_PREINSERT:
-        desired_xpos_site = hole_preinsert + offset
+        desired_xpos_site = preinsert_target
         control_site_name = "grasp_center"
         gripper_cmd = 0.000
 
-    elif state == STATE_ENTRY:
-        desired_xpos_site = hole_entry + offset
+    elif state == STATE_CONTACT_APPROACH:
+        desired_xpos_site = clamp_down_target(
+            state_data["phase_start_pos"],
+            entry_target[:2],
+            entry_target[2],
+            state_data["touch_down_speed"],
+            tau
+        )
         control_site_name = "grasp_center"
         gripper_cmd = 0.000
 
-    elif state == STATE_INSERT:
-        desired_xpos_site = hole_bottom + offset
+    elif state == STATE_HOLE_SEARCH:
+        search_xy = spiral_xy_offset(
+            tau,
+            state_data["search_radius_rate"],
+            state_data["search_radius_max"],
+            state_data["search_omega"]
+        )
+        desired_xpos_site = entry_target.copy()
+        desired_xpos_site[:2] += search_xy[:2]
+        desired_xpos_site[2] = max(
+            bottom_target[2],
+            state_data["phase_start_pos"][2] - state_data["search_down_speed"] * tau
+        )
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_WIGGLE:
+        desired_xpos_site = entry_target.copy()
+        desired_xpos_site[2] = max(
+            bottom_target[2],
+            state_data["phase_start_pos"][2] - state_data["search_down_speed"] * tau
+        )
+        desired_rpy = base_rpy + np.array([
+            state_data["wiggle_amp_deg"] * np.sin(2.0 * np.pi * state_data["wiggle_freq"] * tau),
+            state_data["wiggle_amp_deg"] * np.cos(2.0 * np.pi * state_data["wiggle_freq"] * tau),
+            0.0
+        ])
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_SCREW:
+        desired_xpos_site = entry_target.copy()
+        desired_xpos_site[2] = max(
+            bottom_target[2],
+            state_data["phase_start_pos"][2] - state_data["search_down_speed"] * tau
+        )
+        desired_rpy = base_rpy + np.array([
+            0.0,
+            0.0,
+            state_data["screw_amp_deg"] * np.sin(2.0 * np.pi * state_data["screw_freq"] * tau)
+        ])
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_INSERT_FINAL:
+        desired_xpos_site = bottom_target.copy()
         control_site_name = "grasp_center"
         gripper_cmd = 0.000
 
@@ -347,26 +553,33 @@ def get_target_by_state(d, state, state_data):
 def update_state(m, d, state_data):
     state = state_data["state"]
     now = state_data["time_now"]
+    tau = now - state_data["state_enter_time"]
 
     grasp_center = d.site("grasp_center").xpos.copy()
-    peg_center = d.site("peg_center").xpos.copy()
-    peg_tip = d.site("peg_tip").xpos.copy()
+    prev_grasp_center = state_data["prev_grasp_center"].copy()
 
-    peg_above = peg_center + np.array([0.0, 0.0, 0.05])
-    peg_pregrasp = peg_center + np.array([0.0, 0.0, 0.013])
+    peg_above = state_data["peg_above_target"]
+    peg_pregrasp = state_data["peg_pregrasp_target"]
 
-    hole_preinsert = d.site("hole_preinsert").xpos.copy()
-    hole_entry = d.site("hole_entry").xpos.copy()
-    hole_bottom = d.site("hole_bottom").xpos.copy()
+    hole_preinsert = state_data["hole_preinsert_world"]
+    hole_entry = state_data["hole_entry_world"]
+    hole_bottom = state_data["hole_bottom_world"]
 
-    offset = state_data["grasp_to_peg_tip_offset_world"]
+    offset = state_data["grasp_to_peg_tip_offset_nominal_world"]
+
+    entry_target = hole_entry + offset
+    bottom_target = hole_bottom + offset
+    preinsert_target = hole_preinsert + offset + np.array([0.0, 0.0, state_data["preinsert_extra_z"]])
+
+    dt = max(1e-6, now - state_data["prev_time"])
+    tcp_vel = compute_tcp_velocity(grasp_center, prev_grasp_center, dt)
+    vz_down = -tcp_vel[2]                 # 아래로 갈수록 +
+    vxy = np.linalg.norm(tcp_vel[:2])
+    effort = torque_effort_norm(state_data)
 
     if state == STATE_APPROACH_ABOVE_PEG:
-        dx = grasp_center[0] - peg_above[0]
-        dy = grasp_center[1] - peg_above[1]
-        dz = grasp_center[2] - peg_above[2]
-
-        if abs(dx) <= 0.0001 and abs(dy) <= 0.0001 and abs(dz) <= 0.0001:
+        err = np.linalg.norm(grasp_center - peg_above)
+        if err < 0.004:
             print("[STATE] APPROACH_ABOVE_PEG -> APPROACH_DOWN_TO_PEG")
             set_state(STATE_APPROACH_DOWN_TO_PEG, state_data, d, now)
 
@@ -380,8 +593,10 @@ def update_state(m, d, state_data):
         maybe_lock_peg(m, d, state_data)
 
         if state_data["grasped"]:
-            print("[STATE] GRASP -> LIFT")
-            set_state(STATE_LIFT, state_data, d, now)
+            wait_time = now - state_data["grasp_success_time"]
+            if wait_time > state_data["grasp_wait_time"]:
+                print("[STATE] GRASP -> LIFT")
+                set_state(STATE_LIFT, state_data, d, now)
 
     elif state == STATE_LIFT:
         err = np.linalg.norm(grasp_center - state_data["lift_target"])
@@ -390,28 +605,99 @@ def update_state(m, d, state_data):
             set_state(STATE_MOVE_PREINSERT, state_data, d, now)
 
     elif state == STATE_MOVE_PREINSERT:
-        target = hole_preinsert + offset
-        err = np.linalg.norm(grasp_center - target)
+        err = np.linalg.norm(grasp_center - preinsert_target)
         if err < 0.006:
-            print("[STATE] MOVE_PREINSERT -> ENTRY")
-            set_state(STATE_ENTRY, state_data, d, now)
+            print("[STATE] MOVE_PREINSERT -> CONTACT_APPROACH")
+            set_state(STATE_CONTACT_APPROACH, state_data, d, now)
 
-    elif state == STATE_ENTRY:
-        target = hole_entry + offset
-        err = np.linalg.norm(grasp_center - target)
-        if err < 0.005:
-            print("[STATE] ENTRY -> INSERT")
-            set_state(STATE_INSERT, state_data, d, now)
+    elif state == STATE_CONTACT_APPROACH:
+        # 내려가라고 명령하는데 실제 하강속도 거의 없고 effort가 크면 접촉
+        contact_stuck = (
+            tau > state_data["contact_min_time"] and
+            vz_down < state_data["contact_vz_thresh"] and
+            effort > state_data["contact_effort_thresh"]
+        )
 
-    elif state == STATE_INSERT:
-        err = np.linalg.norm(peg_tip - hole_bottom)
+        if contact_stuck:
+            if state_data["contact_stall_start_time"] is None:
+                state_data["contact_stall_start_time"] = now
+        else:
+            state_data["contact_stall_start_time"] = None
+
+        if (
+            state_data["contact_stall_start_time"] is not None and
+            now - state_data["contact_stall_start_time"] > state_data["contact_hold_time"]
+        ):
+            print("[STATE] CONTACT_APPROACH -> HOLE_SEARCH")
+            set_state(STATE_HOLE_SEARCH, state_data, d, now)
+
+    elif state == STATE_HOLE_SEARCH:
+        # 1) 실제 hole로 들어가기 시작하면 INSERT_FINAL
+        hole_found = (vz_down > state_data["hole_found_vz_thresh"])
+
+        if hole_found:
+            if state_data["hole_found_start_time"] is None:
+                state_data["hole_found_start_time"] = now
+        else:
+            state_data["hole_found_start_time"] = None
+
+        if (
+            state_data["hole_found_start_time"] is not None and
+            now - state_data["hole_found_start_time"] > state_data["hole_found_hold_time"]
+        ):
+            print("[STATE] HOLE_SEARCH -> INSERT_FINAL")
+            set_state(STATE_INSERT_FINAL, state_data, d, now)
+
+        else:
+            # 2) search 명령은 주는데 거의 안 움직이고 effort가 크면 WIGGLE
+            stuck = (
+                vz_down < state_data["stall_vz_thresh"] and
+                vxy < state_data["stall_vxy_thresh"] and
+                effort > state_data["stall_effort_thresh"]
+            )
+
+            if stuck:
+                if state_data["stall_start_time"] is None:
+                    state_data["stall_start_time"] = now
+            else:
+                state_data["stall_start_time"] = None
+
+            if (
+                state_data["stall_start_time"] is not None and
+                now - state_data["stall_start_time"] > state_data["stall_hold_time"]
+            ):
+                print("[STATE] HOLE_SEARCH -> WIGGLE")
+                set_state(STATE_WIGGLE, state_data, d, now)
+
+            elif tau > state_data["search_timeout"]:
+                print("[STATE] HOLE_SEARCH -> RETREAT (timeout)")
+                set_state(STATE_RETREAT, state_data, d, now)
+
+    elif state == STATE_WIGGLE:
+        if tau > state_data["wiggle_time"]:
+            print("[STATE] WIGGLE -> SCREW")
+            set_state(STATE_SCREW, state_data, d, now)
+
+    elif state == STATE_SCREW:
+        if tau > state_data["screw_time"]:
+            print("[STATE] SCREW -> INSERT_FINAL")
+            set_state(STATE_INSERT_FINAL, state_data, d, now)
+
+    elif state == STATE_INSERT_FINAL:
+        err = np.linalg.norm(grasp_center - bottom_target)
         if err < 0.004:
-            print("[STATE] INSERT -> RELEASE")
+            print("[STATE] INSERT_FINAL -> RELEASE")
             set_state(STATE_RELEASE, state_data, d, now)
 
     elif state == STATE_RELEASE:
         time_in_state = now - state_data["state_enter_time"]
-        if time_in_state > 0.30:
+
+        if (not state_data["release_open_started"]) and time_in_state > state_data["release_ungrasp_time"]:
+            state_data["grasped"] = False
+            state_data["release_open_started"] = True
+            print("[STATE] RELEASE | peg detached")
+
+        if time_in_state > state_data["release_total_time"]:
             print("[STATE] RELEASE -> RETREAT")
             set_state(STATE_RETREAT, state_data, d, now)
 
@@ -421,6 +707,8 @@ def update_state(m, d, state_data):
             print("[STATE] RETREAT -> DONE")
             set_state(STATE_DONE, state_data, d, now)
 
+    state_data["prev_grasp_center"] = grasp_center.copy()
+
 
 def print_debug(d, state_data, desired_xpos_site, control_site_name, print_every=0.1):
     now = state_data["time_now"]
@@ -429,61 +717,171 @@ def print_debug(d, state_data, desired_xpos_site, control_site_name, print_every
     state_data["last_print_time"] = now
 
     current_pos = d.site(control_site_name).xpos.copy()
-    peg_center = d.site("peg_center").xpos.copy()
-    peg_tip = d.site("peg_tip").xpos.copy()
-    hole_bottom = d.site("hole_bottom").xpos.copy()
     pos_err = current_pos - desired_xpos_site
+    tau_norm = np.linalg.norm(state_data["last_tau_cmd"])
 
     print(
         f"[{get_state_name(state_data['state'])} | site={control_site_name}] "
         f"POS=({current_pos[0]:.4f}, {current_pos[1]:.4f}, {current_pos[2]:.4f}) | "
         f"ERR=({pos_err[0]:.4f}, {pos_err[1]:.4f}, {pos_err[2]:.4f}) | "
-        f"PEG_CENTER=({peg_center[0]:.4f}, {peg_center[1]:.4f}, {peg_center[2]:.4f}) | "
-        f"PEG_TIP=({peg_tip[0]:.4f}, {peg_tip[1]:.4f}, {peg_tip[2]:.4f}) | "
-        f"HOLE_BOTTOM=({hole_bottom[0]:.4f}, {hole_bottom[1]:.4f}, {hole_bottom[2]:.4f}) | "
-        f"grasped={state_data['grasped']}"
+        f"grasped={state_data['grasped']} | "
+        f"gcmd={state_data['gripper_cmd_current']:.4f} | "
+        f"tau={tau_norm:.3f} | "
+        f"Lcnt={state_data['left_contact_count']} "
+        f"Rcnt={state_data['right_contact_count']} "
+        f"Lfn={state_data['left_contact_normal']:.3f} "
+        f"Rfn={state_data['right_contact_normal']:.3f}"
     )
 
 
+def resolve_model_path():
+    local_path = Path(__file__).resolve().parent / "scene_rb5_gripper.xml"
+    if local_path.exists():
+        return str(local_path)
+
+    return "/home/chu/manipulator_control/rb5/scene_rb5_gripper.xml"
+
+
 def main():
-    model_path = "/home/chu/manipulator_control/rb5/scene_rb5_gripper.xml"
+    model_path = resolve_model_path()
     m, d = create_model_and_data(model_path)
 
     validate_required_sites(m)
+    validate_required_geoms(m)
     initialize_robot_state(m, d)
 
     M, G, jacp, jacr, C0 = create_work_buffers(m)
-
     peg_qpos_adr, peg_qvel_adr = get_peg_freejoint_addrs(m)
 
-    # 기존 게인 유지
+    # 게인
     K_a = np.array([50.0, 50.0, 35.0])
     zeta_a = np.array([9.0, 9.0, 4.0])
 
     K_o = np.array([3.0, 3.0, 1.5])
     zeta_o = np.array([0.3, 0.3, 0.2])
 
+    mujoco.mj_forward(m, d)
+
+    # -----------------------------
+    # 초기 인식값(한 번만 저장)
+    # -----------------------------
+    peg_init_body_world = d.body("peg").xpos.copy()
+    peg_init_center_world = d.site("peg_center").xpos.copy()
+    peg_init_tip_world = d.site("peg_tip").xpos.copy()
+
+    hole_preinsert_world = d.site("hole_preinsert").xpos.copy()
+    hole_entry_world = d.site("hole_entry").xpos.copy()
+    hole_bottom_world = d.site("hole_bottom").xpos.copy()
+
+    peg_init_quat_world = d.qpos[peg_qpos_adr+3:peg_qpos_adr+7].copy()
+
+    peg_above_target = peg_init_center_world + np.array([0.0, 0.0, 0.05])
+    peg_pregrasp_target = peg_init_center_world + np.array([0.0, 0.0, 0.013])
+    peg_grasp_target = peg_init_center_world + np.array([0.0, 0.0, 0.013])
+
+    grasp_to_peg_tip_offset_nominal_world = peg_grasp_target - peg_init_tip_world
+    peg_body_offset_from_grasp_nominal_world = peg_init_body_world - peg_grasp_target
+
+    initial_grasp_center = d.site("grasp_center").xpos.copy()
+
     state_data = {
         "state": STATE_APPROACH_ABOVE_PEG,
         "state_enter_time": 0.0,
         "time_now": 0.0,
         "last_print_time": -1.0,
+        "prev_time": 0.0,
 
         "grasped": False,
+        "grasp_success_time": None,
 
         "lift_target": np.zeros(3),
         "release_target": np.zeros(3),
         "retreat_target": np.zeros(3),
+        "grasp_hold_target": np.zeros(3),
 
         "peg_qpos_adr": peg_qpos_adr,
         "peg_qvel_adr": peg_qvel_adr,
 
-        "peg_quat_locked": np.array([1.0, 0.0, 0.0, 0.0]),
-        "peg_body_offset_from_grasp_world": np.zeros(3),
-        "grasp_to_peg_tip_offset_world": np.zeros(3),
-    }
+        "peg_init_quat_world": peg_init_quat_world,
+        "peg_body_offset_from_grasp_nominal_world": peg_body_offset_from_grasp_nominal_world,
+        "grasp_to_peg_tip_offset_nominal_world": grasp_to_peg_tip_offset_nominal_world,
 
-    mujoco.mj_forward(m, d)
+        "peg_above_target": peg_above_target,
+        "peg_pregrasp_target": peg_pregrasp_target,
+        "peg_grasp_target": peg_grasp_target,
+
+        "hole_preinsert_world": hole_preinsert_world,
+        "hole_entry_world": hole_entry_world,
+        "hole_bottom_world": hole_bottom_world,
+
+        "left_finger_geom_id": m.geom("left_finger_geom").id,
+        "right_finger_geom_id": m.geom("right_finger_geom").id,
+        "peg_geom_id": m.geom("peg_geom").id,
+
+        "contact_hold_start": None,
+
+        "grasp_normal_force_threshold": 0.5,
+        "grasp_contact_hold_time": 0.05,
+        "grasp_xy_tol": 0.0035,
+        "grasp_wait_time": 2.0,
+
+        "left_contact_count": 0,
+        "right_contact_count": 0,
+        "left_contact_normal": 0.0,
+        "right_contact_normal": 0.0,
+        "left_contact_total": 0.0,
+        "right_contact_total": 0.0,
+
+        "gripper_act_id": m.actuator("gripper_act").id,
+        "gripper_cmd_current": 0.010,
+        "gripper_close_speed": 0.015,
+        "gripper_open_speed": 0.030,
+
+        "release_open_started": False,
+        "release_ungrasp_time": 0.20,
+        "release_total_time": 0.50,
+
+        "preinsert_extra_z": 0.03,
+
+        "touch_down_speed": 0.010,      # m/s
+        "search_down_speed": 0.003,     # m/s
+        "search_radius_rate": 0.0020,   # m/s
+        "search_radius_max": 0.0035,    # 3.5 mm
+        "search_omega": 2.0 * np.pi * 1.5,
+
+        "wiggle_amp_deg": 3.0,
+        "wiggle_freq": 2.0,
+        "wiggle_time": 1.0,
+
+        "screw_amp_deg": 6.0,
+        "screw_freq": 1.5,
+        "screw_time": 1.0,
+
+        # CONTACT_APPROACH 판단
+        "contact_stall_start_time": None,
+        "contact_min_time": 0.20,
+        "contact_vz_thresh": 0.0010,
+        "contact_effort_thresh": 12.0,
+        "contact_hold_time": 0.12,
+
+        # HOLE_SEARCH 판단
+        "stall_start_time": None,
+        "hole_found_start_time": None,
+
+        "stall_vz_thresh": 0.0010,      # m/s
+        "stall_vxy_thresh": 0.0020,     # m/s
+        "stall_effort_thresh": 12.0,
+        "stall_hold_time": 0.15,
+
+        "hole_found_vz_thresh": 0.0030,  # 아래로 실제 들어가기 시작
+        "hole_found_hold_time": 0.08,
+        "search_timeout": 2.0,
+
+        "phase_start_pos": initial_grasp_center.copy(),
+        "prev_grasp_center": initial_grasp_center.copy(),
+
+        "last_tau_cmd": np.zeros(6),
+    }
 
     with mujoco.viewer.launch_passive(m, d) as viewer:
         t0 = time()
@@ -493,7 +891,7 @@ def main():
             state_data["time_now"] = now
 
             desired_xpos_site, desired_rpy, gripper_cmd, control_site_name = get_target_by_state(
-                d, state_data["state"], state_data
+                state_data
             )
 
             compute_mass_and_gravity(m, d, M, G)
@@ -506,19 +904,26 @@ def main():
                 site_name=control_site_name
             )
 
-            apply_control(d, torque0, max_torque=80, gripper_cmd=gripper_cmd)
+            apply_control(
+                m, d, torque0, state_data,
+                max_torque=80,
+                gripper_cmd_target=gripper_cmd
+            )
 
-            # grasp된 동안에는 peg를 gripper에 붙여서 따라오게 함
+            state_data["last_tau_cmd"] = d.ctrl[0:6].copy()
+
+            # sim 편의용 peg attach
             if state_data["grasped"]:
                 attach_peg_to_gripper(m, d, state_data)
                 mujoco.mj_forward(m, d)
 
-            print_debug(d, state_data, desired_xpos_site, control_site_name, print_every=0.1)
+            mujoco.mj_step(m, d)
 
+            print_debug(d, state_data, desired_xpos_site, control_site_name, print_every=0.1)
             update_state(m, d, state_data)
 
-            mujoco.mj_step(m, d)
             viewer.sync()
+            state_data["prev_time"] = now
 
 
 if __name__ == "__main__":

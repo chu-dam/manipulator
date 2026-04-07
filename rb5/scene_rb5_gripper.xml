@@ -62,22 +62,25 @@
              quat = x축 +90도 회전
              -> hole 축이 world Z축 방향
              -> 위에서 아래로 삽입하는 구성
-             ========================================================= -->
-        <body name="hole_fixture" pos="0.00 -0.68 0.0" quat="0.70710678 0.70710678 0 0">
-            <geom name="hole_13_geom"
-                  type="mesh"
-                  mesh="hole_13_mesh"
-                  rgba="0.70 0.70 0.75 1"
-                  contype="2"
-                  conaffinity="1"
-                  friction="1.0 0.005 0.0001"/>
+             ========================================================= -->\
+        <geom name="hole_13_geom"
+          type="mesh"
+          mesh="hole_13_mesh"
+          pos="0.00 -0.68 0.0"
+          quat="0.70710678 0.70710678 0 0"
+          rgba="0.70 0.70 0.75 1"
+          contype="2"
+          conaffinity="1"
+          friction="1.0 0.005 0.0001"/>
 
-            <!-- hidden reference sites -->
+        <body name="hole_sites" pos="0.00 -0.68 0.0" quat="0.70710678 0.70710678 0 0">
+            <!-- joint 없음 -->
             <site name="hole_bottom"    pos="0 0.000 0" size="0.0001" rgba="0 1 1 0"/>
             <site name="hole_center"    pos="0 0.005 0" size="0.0001" rgba="1 1 0 0"/>
             <site name="hole_entry"     pos="0 0.010 0" size="0.0001" rgba="0 1 0 0"/>
             <site name="hole_preinsert" pos="0 0.030 0" size="0.0001" rgba="1 0 1 0"/>
         </body>
+        
 
         <!-- =========================================================
              Peg stand
@@ -110,7 +113,7 @@
                   mass="0.03"
                   rgba="0.85 0.75 0.20 1"
                   contype="1"
-                  conaffinity="2"
+                  conaffinity="3"
                   friction="1.2 0.01 0.0001"/>
 
             <!-- hidden peg reference sites -->
