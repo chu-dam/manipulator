@@ -59,6 +59,9 @@ def validate_required_sites(m):
         "grasp_center",
         "peg_center",
         "peg_tip",
+        "hole_preinsert",
+        "hole_entry",
+        "hole_bottom",
     ]
 
     missing = []
@@ -79,10 +82,9 @@ def initialize_robot_state(m, d):
     # arm home
     d.qpos[:6] = [-0.5, 0.0, 1.0, 0.0, 0.0, 0.0]
 
-    # gripper joint qpos address
+    # gripper open
     left_id = m.joint("grip_left").id
     right_id = m.joint("grip_right").id
-
     left_qpos_adr = m.jnt_qposadr[left_id]
     right_qpos_adr = m.jnt_qposadr[right_id]
 
@@ -117,7 +119,7 @@ def compute_task_torque(
     M, G, jacp, jacr, C0,
     desired_xpos_site, desired_rpy,
     K_a, zeta_a, K_o, zeta_o,
-    site_name="tcp"
+    site_name="grasp_center"
 ):
     np.fill_diagonal(C0, np.sum(np.abs(M[0:6, 0:6]), axis=1))
 
@@ -177,45 +179,18 @@ def get_state_name(state):
         return "GRASP"
     elif state == STATE_LIFT:
         return "LIFT"
+    elif state == STATE_MOVE_PREINSERT:
+        return "MOVE_PREINSERT"
+    elif state == STATE_ENTRY:
+        return "ENTRY"
+    elif state == STATE_INSERT:
+        return "INSERT"
+    elif state == STATE_RELEASE:
+        return "RELEASE"
+    elif state == STATE_RETREAT:
+        return "RETREAT"
     else:
         return "DONE"
-
-
-
-
-def get_target_by_state(d, state, state_data):
-    desired_rpy = np.array([90.0, 0.0, 0.0])
-
-    peg_center = d.site("peg_center").xpos.copy()
-    peg_above = peg_center + np.array([0.0, 0.0, 0.05])
-    peg_pregrasp = peg_center + np.array([0.0, 0.0, 0.013])   # 월드 z + 13 mm
-
-    if state == STATE_APPROACH_ABOVE_PEG:
-        desired_xpos_site = peg_above
-        control_site_name = "grasp_center"
-        gripper_cmd = 0.012   # open
-
-    elif state == STATE_APPROACH_DOWN_TO_PEG:
-        desired_xpos_site = peg_pregrasp
-        control_site_name = "grasp_center"
-        gripper_cmd = 0.012   # still open
-
-    elif state == STATE_GRASP:
-        desired_xpos_site = peg_pregrasp
-        control_site_name = "grasp_center"
-        gripper_cmd = 0.000   # close
-
-    elif state == STATE_LIFT:
-        desired_xpos_site = state_data["lift_target"].copy()
-        control_site_name = "grasp_center"
-        gripper_cmd = 0.000
-
-    else:
-        desired_xpos_site = state_data["lift_target"].copy()
-        control_site_name = "grasp_center"
-        gripper_cmd = 0.000
-
-    return desired_xpos_site, desired_rpy, gripper_cmd, control_site_name
 
 
 def get_peg_freejoint_addrs(m):
@@ -234,20 +209,18 @@ def get_peg_freejoint_addrs(m):
 
 def attach_peg_to_gripper(m, d, state_data):
     """
-    semi-physical grasp:
-    grasp 성공 순간의 상대 위치를 유지하면서 peg를 gripper에 붙여서 따라오게 함
+    grasp 성공 순간의 상대 위치를 유지하면서
+    peg를 gripper에 붙여서 따라오게 함
     """
     qpos_adr = state_data["peg_qpos_adr"]
     qvel_adr = state_data["peg_qvel_adr"]
 
     grasp_center_pos = d.site("grasp_center").xpos.copy()
 
-    # grasp 성공 순간 저장한 상대 위치를 그대로 유지
     peg_origin_pos = grasp_center_pos + state_data["peg_body_offset_from_grasp_world"]
 
     d.qpos[qpos_adr:qpos_adr+3] = peg_origin_pos
     d.qpos[qpos_adr+3:qpos_adr+7] = state_data["peg_quat_locked"]
-
     d.qvel[qvel_adr:qvel_adr+6] = 0.0
 
 
@@ -259,35 +232,116 @@ def set_state(new_state, state_data, d, now):
         current_grasp_center = d.site("grasp_center").xpos.copy()
         state_data["lift_target"] = current_grasp_center + np.array([0.0, 0.0, 0.08])
 
+    elif new_state == STATE_RELEASE:
+        # release 직전 위치를 유지한 채 gripper open
+        state_data["release_target"] = d.site("grasp_center").xpos.copy()
+        state_data["grasped"] = False
+
+    elif new_state == STATE_RETREAT:
+        current_grasp_center = d.site("grasp_center").xpos.copy()
+        state_data["retreat_target"] = current_grasp_center + np.array([0.0, 0.0, 0.05])
+
 
 def maybe_lock_peg(m, d, state_data):
+    """
+    z는 13mm 위에서 잡는 구조이므로
+    x, y 정렬만으로 grasp 성공 판정
+    """
     if state_data["grasped"]:
         return
 
     grasp_center = d.site("grasp_center").xpos.copy()
     peg_center = d.site("peg_center").xpos.copy()
+    peg_tip = d.site("peg_tip").xpos.copy()
 
     dx = grasp_center[0] - peg_center[0]
     dy = grasp_center[1] - peg_center[1]
     time_in_state = state_data["time_now"] - state_data["state_enter_time"]
 
-    # x, y 오차만으로 grasp 판정
     if abs(dx) < 0.004 and abs(dy) < 0.004 and time_in_state > 0.35:
         state_data["grasped"] = True
 
         qpos_adr = state_data["peg_qpos_adr"]
 
-        # 현재 peg quaternion 고정 저장
+        # 현재 peg quaternion 저장
         peg_quat_locked = d.qpos[qpos_adr+3:qpos_adr+7].copy()
         state_data["peg_quat_locked"] = peg_quat_locked
 
-        # 핵심:
-        # grasp 성공 순간의 "peg body origin - grasp_center" 상대 위치를 그대로 저장
+        # grasp 성공 순간의 peg body origin - grasp_center 상대 위치 저장
         peg_body_pos = d.body("peg").xpos.copy()
-        peg_body_offset_from_grasp_world = peg_body_pos - grasp_center
-        state_data["peg_body_offset_from_grasp_world"] = peg_body_offset_from_grasp_world
+        state_data["peg_body_offset_from_grasp_world"] = peg_body_pos - grasp_center
+
+        # insertion용 offset 저장:
+        # grasp_center target = hole_target + (grasp_center - peg_tip)
+        state_data["grasp_to_peg_tip_offset_world"] = grasp_center - peg_tip
 
         print(f"[GRASP] peg locked to gripper | dx={dx:.6f}, dy={dy:.6f}")
+
+
+def get_target_by_state(d, state, state_data):
+    desired_rpy = np.array([90.0, 0.0, 0.0])
+
+    peg_center = d.site("peg_center").xpos.copy()
+    peg_above = peg_center + np.array([0.0, 0.0, 0.05])
+    peg_pregrasp = peg_center + np.array([0.0, 0.0, 0.013])
+
+    hole_preinsert = d.site("hole_preinsert").xpos.copy()
+    hole_entry = d.site("hole_entry").xpos.copy()
+    hole_bottom = d.site("hole_bottom").xpos.copy()
+
+    offset = state_data["grasp_to_peg_tip_offset_world"]
+
+    if state == STATE_APPROACH_ABOVE_PEG:
+        desired_xpos_site = peg_above
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.012
+
+    elif state == STATE_APPROACH_DOWN_TO_PEG:
+        desired_xpos_site = peg_pregrasp
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.012
+
+    elif state == STATE_GRASP:
+        desired_xpos_site = peg_pregrasp
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_LIFT:
+        desired_xpos_site = state_data["lift_target"].copy()
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_MOVE_PREINSERT:
+        desired_xpos_site = hole_preinsert + offset
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_ENTRY:
+        desired_xpos_site = hole_entry + offset
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_INSERT:
+        desired_xpos_site = hole_bottom + offset
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.000
+
+    elif state == STATE_RELEASE:
+        desired_xpos_site = state_data["release_target"].copy()
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.012
+
+    elif state == STATE_RETREAT:
+        desired_xpos_site = state_data["retreat_target"].copy()
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.012
+
+    else:
+        desired_xpos_site = state_data["retreat_target"].copy()
+        control_site_name = "grasp_center"
+        gripper_cmd = 0.012
+
+    return desired_xpos_site, desired_rpy, gripper_cmd, control_site_name
 
 
 def update_state(m, d, state_data):
@@ -296,9 +350,16 @@ def update_state(m, d, state_data):
 
     grasp_center = d.site("grasp_center").xpos.copy()
     peg_center = d.site("peg_center").xpos.copy()
+    peg_tip = d.site("peg_tip").xpos.copy()
+
     peg_above = peg_center + np.array([0.0, 0.0, 0.05])
     peg_pregrasp = peg_center + np.array([0.0, 0.0, 0.013])
 
+    hole_preinsert = d.site("hole_preinsert").xpos.copy()
+    hole_entry = d.site("hole_entry").xpos.copy()
+    hole_bottom = d.site("hole_bottom").xpos.copy()
+
+    offset = state_data["grasp_to_peg_tip_offset_world"]
 
     if state == STATE_APPROACH_ABOVE_PEG:
         dx = grasp_center[0] - peg_above[0]
@@ -323,12 +384,41 @@ def update_state(m, d, state_data):
             set_state(STATE_LIFT, state_data, d, now)
 
     elif state == STATE_LIFT:
-        current = d.site("grasp_center").xpos.copy()
-        target = state_data["lift_target"]
-        err = np.linalg.norm(current - target)
-
+        err = np.linalg.norm(grasp_center - state_data["lift_target"])
         if err < 0.005:
-            print("[STATE] LIFT -> DONE")
+            print("[STATE] LIFT -> MOVE_PREINSERT")
+            set_state(STATE_MOVE_PREINSERT, state_data, d, now)
+
+    elif state == STATE_MOVE_PREINSERT:
+        target = hole_preinsert + offset
+        err = np.linalg.norm(grasp_center - target)
+        if err < 0.006:
+            print("[STATE] MOVE_PREINSERT -> ENTRY")
+            set_state(STATE_ENTRY, state_data, d, now)
+
+    elif state == STATE_ENTRY:
+        target = hole_entry + offset
+        err = np.linalg.norm(grasp_center - target)
+        if err < 0.005:
+            print("[STATE] ENTRY -> INSERT")
+            set_state(STATE_INSERT, state_data, d, now)
+
+    elif state == STATE_INSERT:
+        err = np.linalg.norm(peg_tip - hole_bottom)
+        if err < 0.004:
+            print("[STATE] INSERT -> RELEASE")
+            set_state(STATE_RELEASE, state_data, d, now)
+
+    elif state == STATE_RELEASE:
+        time_in_state = now - state_data["state_enter_time"]
+        if time_in_state > 0.30:
+            print("[STATE] RELEASE -> RETREAT")
+            set_state(STATE_RETREAT, state_data, d, now)
+
+    elif state == STATE_RETREAT:
+        err = np.linalg.norm(grasp_center - state_data["retreat_target"])
+        if err < 0.005:
+            print("[STATE] RETREAT -> DONE")
             set_state(STATE_DONE, state_data, d, now)
 
 
@@ -341,6 +431,7 @@ def print_debug(d, state_data, desired_xpos_site, control_site_name, print_every
     current_pos = d.site(control_site_name).xpos.copy()
     peg_center = d.site("peg_center").xpos.copy()
     peg_tip = d.site("peg_tip").xpos.copy()
+    hole_bottom = d.site("hole_bottom").xpos.copy()
     pos_err = current_pos - desired_xpos_site
 
     print(
@@ -349,6 +440,7 @@ def print_debug(d, state_data, desired_xpos_site, control_site_name, print_every
         f"ERR=({pos_err[0]:.4f}, {pos_err[1]:.4f}, {pos_err[2]:.4f}) | "
         f"PEG_CENTER=({peg_center[0]:.4f}, {peg_center[1]:.4f}, {peg_center[2]:.4f}) | "
         f"PEG_TIP=({peg_tip[0]:.4f}, {peg_tip[1]:.4f}, {peg_tip[2]:.4f}) | "
+        f"HOLE_BOTTOM=({hole_bottom[0]:.4f}, {hole_bottom[1]:.4f}, {hole_bottom[2]:.4f}) | "
         f"grasped={state_data['grasped']}"
     )
 
@@ -364,6 +456,7 @@ def main():
 
     peg_qpos_adr, peg_qvel_adr = get_peg_freejoint_addrs(m)
 
+    # 기존 게인 유지
     K_a = np.array([50.0, 50.0, 35.0])
     zeta_a = np.array([9.0, 9.0, 4.0])
 
@@ -375,12 +468,19 @@ def main():
         "state_enter_time": 0.0,
         "time_now": 0.0,
         "last_print_time": -1.0,
+
         "grasped": False,
+
         "lift_target": np.zeros(3),
+        "release_target": np.zeros(3),
+        "retreat_target": np.zeros(3),
+
         "peg_qpos_adr": peg_qpos_adr,
         "peg_qvel_adr": peg_qvel_adr,
+
         "peg_quat_locked": np.array([1.0, 0.0, 0.0, 0.0]),
         "peg_body_offset_from_grasp_world": np.zeros(3),
+        "grasp_to_peg_tip_offset_world": np.zeros(3),
     }
 
     mujoco.mj_forward(m, d)
@@ -408,7 +508,7 @@ def main():
 
             apply_control(d, torque0, max_torque=80, gripper_cmd=gripper_cmd)
 
-            # grasp된 이후에는 peg를 gripper에 붙여서 따라오게 함
+            # grasp된 동안에는 peg를 gripper에 붙여서 따라오게 함
             if state_data["grasped"]:
                 attach_peg_to_gripper(m, d, state_data)
                 mujoco.mj_forward(m, d)
