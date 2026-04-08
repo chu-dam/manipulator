@@ -124,8 +124,14 @@ def compute_task_torque(
     M, G, jacp, jacr, C0,
     desired_xpos_site, desired_rpy,
     K_a, zeta_a, K_o, zeta_o,
-    site_name="peg_tip"
+    site_name="peg_tip",
+    pos_task_axis_mask=None
 ):
+    if pos_task_axis_mask is None:
+        pos_task_axis_mask = np.ones(3, dtype=np.float64)
+    else:
+        pos_task_axis_mask = np.asarray(pos_task_axis_mask, dtype=np.float64)
+
     np.fill_diagonal(C0, np.sum(np.abs(M[0:6, 0:6]), axis=1))
 
     site_id = m.site(site_name).id
@@ -135,6 +141,7 @@ def compute_task_torque(
     jacr0 = deepcopy(jacr[:, 0:6])
 
     xpos_err0 = d.site(site_name).xpos - desired_xpos_site
+    xpos_err0 = xpos_err0 * pos_task_axis_mask
 
     R_current = d.site(site_id).xmat.reshape(3, 3)
     R_desired = rpy_to_rotmat(*desired_rpy)
@@ -149,6 +156,8 @@ def compute_task_torque(
     F_ori_0 = (K_o * ori_err0) + (zeta_o * np.sqrt(K_o) * w0)
 
     xpos_dot0 = jacp0 @ d.qvel[0:6]
+    xpos_dot0 = xpos_dot0 * pos_task_axis_mask
+
     force0 = (K_a * xpos_err0) + (zeta_a * np.sqrt(K_a) * xpos_dot0)
 
     M0 = M[0:6, 0:6]
@@ -159,6 +168,7 @@ def compute_task_torque(
     Lambda_pos = np.linalg.pinv(Lambda_inv + eps * np.eye(3))
 
     force0_task = Lambda_pos @ force0
+    force0_task = force0_task * pos_task_axis_mask
 
     torque0 = (
         -0 * C0 @ d.qvel[0:6]
@@ -224,6 +234,7 @@ def set_state(new_state, state_data, d, now):
     state_data["state_enter_time"] = now
     state_data["phase_start_pos"] = d.site("peg_tip").xpos.copy()
     state_data["hole_found_start_time"] = None
+    state_data["insert_final_stall_start_time"] = None
 
     if new_state == STATE_RETREAT:
         current_tip = d.site("peg_tip").xpos.copy()
@@ -283,7 +294,11 @@ def get_target_by_state(state_data):
         desired_rpy = base_rpy + np.array([droll, dpitch, 0.0])
 
     elif state == STATE_INSERT_FINAL:
-        desired_xpos_site = hole_bottom.copy()
+        desired_xpos_site = state_data["phase_start_pos"].copy()
+        desired_xpos_site[2] = max(
+            state_data["insert_final_target_z_m"],
+            state_data["phase_start_pos"][2] - state_data["insert_final_down_speed"] * tau
+        )
 
     elif state == STATE_RETREAT:
         desired_xpos_site = state_data["retreat_target"].copy()
@@ -369,18 +384,26 @@ def update_state(m, d, state_data):
             set_state(STATE_RETREAT, state_data, d, now)
 
     elif state == STATE_INSERT_FINAL:
-        done_cond = (
-            tip_xy_err_bottom < state_data["insert_xy_tol"] and
-            abs(peg_tip[2] - hole_bottom[2]) < state_data["insert_z_tol"]
-        )
-
-        if done_cond:
+        # DONE 조건: peg tip z가 지면에서 5 mm 이하 도달
+        if peg_tip[2] <= state_data["insert_final_done_z_m"]:
             print("[STATE] INSERT_FINAL -> DONE")
             set_state(STATE_DONE, state_data, d, now)
 
-        elif tau > state_data["insert_timeout"]:
-            print("[STATE] INSERT_FINAL -> RETREAT (timeout)")
-            set_state(STATE_RETREAT, state_data, d, now)
+        else:
+            # stall 감시는 z > 8 mm 구간에서만 수행
+            monitor_zone = peg_tip[2] > state_data["insert_final_stall_monitor_z_m"]
+
+            # "v = 0"는 실제론 exact 0보다 threshold로 보는 게 안정적
+            stalled = tip_vz_abs < state_data["insert_final_stall_v_thresh_mps"]
+
+            if monitor_zone and stalled:
+                if state_data["insert_final_stall_start_time"] is None:
+                    state_data["insert_final_stall_start_time"] = now
+                elif (now - state_data["insert_final_stall_start_time"]) > state_data["insert_final_stall_hold_time"]:
+                    print("[STATE] INSERT_FINAL -> RETREAT (timeout)")
+                    set_state(STATE_RETREAT, state_data, d, now)
+            else:
+                state_data["insert_final_stall_start_time"] = None
 
     elif state == STATE_RETREAT:
         err = np.linalg.norm(peg_tip - state_data["retreat_target"])
@@ -479,6 +502,7 @@ def main():
         "insert_xy_tol": 0.0010,
         "insert_z_tol": 0.0020,
         "insert_timeout": 3.0,
+        "insert_final_down_speed": 0.008,
 
         "retreat_tol": 0.005,
 
@@ -505,6 +529,14 @@ def main():
 
         "contact_push_below_top_m": CONTACT_PUSH_BELLOW_TOP_M,
         "retreat_lift_m": RETREAT_LIFT_M,
+
+        "insert_final_down_speed": 0.010,
+        "insert_final_target_z_m": 0.005,
+        "insert_final_stall_monitor_z_m": 0.008,
+        "insert_final_stall_v_thresh_mps": 0.0005,
+        "insert_final_stall_hold_time": 2.0,
+        "insert_final_stall_start_time": None,
+        "insert_final_done_z_m": 0.006,
     }
 
     with mujoco.viewer.launch_passive(m, d) as viewer:
@@ -518,13 +550,23 @@ def main():
 
             compute_mass_and_gravity(m, d, M, G)
 
-            torque0 = compute_task_torque(
-                m, d,
-                M, G, jacp, jacr, C0,
-                desired_xpos_site, desired_rpy,
-                K_a, zeta_a, K_o, zeta_o,
-                site_name=control_site_name
-            )
+            if state_data["state"] == STATE_INSERT_FINAL:
+                torque0 = compute_task_torque(
+                    m, d,
+                    M, G, jacp, jacr, C0,
+                    desired_xpos_site, desired_rpy,
+                    K_a, zeta_a, K_o, zeta_o,
+                    site_name=control_site_name,
+                    pos_task_axis_mask=np.array([0.0, 0.0, 1.0])
+                )
+            else:
+                torque0 = compute_task_torque(
+                    m, d,
+                    M, G, jacp, jacr, C0,
+                    desired_xpos_site, desired_rpy,
+                    K_a, zeta_a, K_o, zeta_o,
+                    site_name=control_site_name
+                )
 
             apply_control(d, torque0, max_torque=80)
             state_data["last_tau_cmd"] = d.ctrl[0:6].copy()
