@@ -1,0 +1,138 @@
+<mujoco model="rb5 peg-in-hole scene">
+
+  <include file="rb5_peg_in_hole.xml"/>
+
+  <visual>
+    <headlight diffuse="0.7 0.7 0.7"
+               ambient="0.35 0.35 0.35"
+               specular="0.15 0.15 0.15"/>
+    <rgba haze="0.15 0.15 0.15 1"/>
+    <global azimuth="135" elevation="-20"/>
+    <quality shadowsize="16384"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox"
+             builtin="gradient"
+             rgb1="0.85 0.90 0.95"
+             rgb2="0.20 0.25 0.35"
+             width="512"
+             height="3072"/>
+  </asset>
+
+  <worldbody>
+    <!-- lights -->
+    <light name="main_light"
+           pos="0.0 -0.2 2.2"
+           dir="0.0 -0.1 -1.0"
+           directional="true"/>
+
+    <light name="side_light"
+           pos="0.8 0.4 1.6"
+           dir="-0.4 -0.5 -1.0"
+           directional="true"
+           diffuse="0.5 0.5 0.5"
+           specular="0.1 0.1 0.1"/>
+
+    <!-- cameras -->
+    <camera name="overview"
+            pos="1.10 0.40 1.35"
+            xyaxes="0 -1 0 0 0 1"/>
+
+    <camera name="hole_closeup"
+            pos="0.35 -0.30 0.85"
+            xyaxes="0 -1 0 0 0 1"/>
+
+    <!-- =========================================================
+         Hole block
+         outer size = 60 x 60 x 40 mm
+         hole dia   = 51 mm
+         local +Y = insertion direction
+         ========================================================= -->
+
+    <!-- visual only -->
+    <geom name="hole_block_visual"
+            type="box"
+            pos="0.00 -0.68 0.0"
+            quat="0.70710678 0.70710678 0 0"
+            size="0.030 0.020 0.030"
+            rgba="0.70 0.70 0.75 0.0"
+            contype="0"
+            conaffinity="0"/>
+
+    <!-- 32-gon collision hole -->
+    <body name="hole_collision"
+          pos="0.00 -0.68 0.0"
+          quat="0.70710678 0.70710678 0 0">
+
+      <!--
+        hole radius = 25.5 mm = 0.0255
+        outer half size = 30 mm = 0.030
+        ring mid radius = 27.75 mm = 0.02775
+        radial half thickness = 2.25 mm = 0.00225
+        tangential half length ≈ 2.8 mm = 0.0028
+        y half thickness = 20 mm = 0.020
+      -->
+
+      <geom name="hole_seg_00" type="box" pos="0.000000 0.020000 0.027750" quat="1.000000 0 0.000000 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_01" type="box" pos="0.005414 0.020000 0.027217" quat="0.995185 0 0.098017 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_02" type="box" pos="0.010619 0.020000 0.025638" quat="0.980785 0 0.195090 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_03" type="box" pos="0.015417 0.020000 0.023073" quat="0.956940 0 0.290285 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_04" type="box" pos="0.019622 0.020000 0.019622" quat="0.923880 0 0.382683 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_05" type="box" pos="0.023073 0.020000 0.015417" quat="0.881921 0 0.471397 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_06" type="box" pos="0.025638 0.020000 0.010619" quat="0.831470 0 0.555570 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_07" type="box" pos="0.027217 0.020000 0.005414" quat="0.773010 0 0.634393 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_08" type="box" pos="0.027750 0.020000 0.000000" quat="0.707107 0 0.707107 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_09" type="box" pos="0.027217 0.020000 -0.005414" quat="0.634393 0 0.773010 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_10" type="box" pos="0.025638 0.020000 -0.010619" quat="0.555570 0 0.831470 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_11" type="box" pos="0.023073 0.020000 -0.015417" quat="0.471397 0 0.881921 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_12" type="box" pos="0.019622 0.020000 -0.019622" quat="0.382683 0 0.923880 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_13" type="box" pos="0.015417 0.020000 -0.023073" quat="0.290285 0 0.956940 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_14" type="box" pos="0.010619 0.020000 -0.025638" quat="0.195090 0 0.980785 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_15" type="box" pos="0.005414 0.020000 -0.027217" quat="0.098017 0 0.995185 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_16" type="box" pos="0.000000 0.020000 -0.027750" quat="0.000000 0 1.000000 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_17" type="box" pos="-0.005414 0.020000 -0.027217" quat="-0.098017 0 0.995185 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_18" type="box" pos="-0.010619 0.020000 -0.025638" quat="-0.195090 0 0.980785 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_19" type="box" pos="-0.015417 0.020000 -0.023073" quat="-0.290285 0 0.956940 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_20" type="box" pos="-0.019622 0.020000 -0.019622" quat="-0.382683 0 0.923880 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_21" type="box" pos="-0.023073 0.020000 -0.015417" quat="-0.471397 0 0.881921 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_22" type="box" pos="-0.025638 0.020000 -0.010619" quat="-0.555570 0 0.831470 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_23" type="box" pos="-0.027217 0.020000 -0.005414" quat="-0.634393 0 0.773010 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_24" type="box" pos="-0.027750 0.020000 0.000000" quat="-0.707107 0 0.707107 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_25" type="box" pos="-0.027217 0.020000 0.005414" quat="-0.773010 0 0.634393 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_26" type="box" pos="-0.025638 0.020000 0.010619" quat="-0.831470 0 0.555570 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_27" type="box" pos="-0.023073 0.020000 0.015417" quat="-0.881921 0 0.471397 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_28" type="box" pos="-0.019622 0.020000 0.019622" quat="-0.923880 0 0.382683 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_29" type="box" pos="-0.015417 0.020000 0.023073" quat="-0.956940 0 0.290285 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_30" type="box" pos="-0.010619 0.020000 0.025638" quat="-0.980785 0 0.195090 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+      <geom name="hole_seg_31" type="box" pos="-0.005414 0.020000 0.027217" quat="-0.995185 0 0.098017 0" size="0.0028 0.0200 0.00225" rgba="0 0 1 1" contype="2" conaffinity="1" margin="0.0" friction="1.0 0.005 0.0001"/>
+    </body>
+
+    <!-- hole reference sites -->
+    <body name="hole_sites"
+          pos="0.00 -0.68 0.0"
+          quat="0.70710678 0.70710678 0 0">
+
+      <!-- thickness = 40 mm -->
+      <site name="hole_bottom"
+            pos="0 0.000 0"
+            size="0.003"
+            rgba="0 1 1 0"/>
+
+      <site name="hole_center"
+            pos="0 0.020 0"
+            size="0.003"
+            rgba="1 1 0 0"/>
+
+      <site name="hole_entry"
+            pos="0 0.040 0"
+            size="0.003"
+            rgba="0 1 0 0"/>
+
+      <site name="hole_preinsert"
+            pos="0 0.070 0"
+            size="0.003"
+            rgba="1 0 1 0"/>
+    </body>
+  </worldbody>
+</mujoco>

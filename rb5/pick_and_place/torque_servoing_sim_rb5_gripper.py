@@ -302,7 +302,6 @@ def attach_peg_to_gripper(m, d, state_data):
     qvel_adr = state_data["peg_qvel_adr"]
 
     grasp_center_pos = d.site("grasp_center").xpos.copy()
-
     peg_origin_pos = grasp_center_pos + state_data["peg_body_offset_from_grasp_nominal_world"]
 
     d.qpos[qpos_adr:qpos_adr+3] = peg_origin_pos
@@ -315,7 +314,6 @@ def set_state(new_state, state_data, d, now):
     state_data["state_enter_time"] = now
     state_data["phase_start_pos"] = d.site("grasp_center").xpos.copy()
 
-    # 상태 전이할 때 stall / detect timer 리셋
     state_data["contact_stall_start_time"] = None
     state_data["stall_start_time"] = None
     state_data["hole_found_start_time"] = None
@@ -331,15 +329,6 @@ def set_state(new_state, state_data, d, now):
     elif new_state == STATE_RETREAT:
         current_grasp_center = d.site("grasp_center").xpos.copy()
         state_data["retreat_target"] = current_grasp_center + np.array([0.0, 0.0, 0.05])
-
-
-def spiral_xy_offset(t, radius_rate, radius_max, omega):
-    r = min(radius_rate * t, radius_max)
-    return np.array([
-        r * np.cos(omega * t),
-        r * np.sin(omega * t),
-        0.0
-    ])
 
 
 def clamp_down_target(start_pos, target_xy, min_z, down_speed, t):
@@ -421,6 +410,18 @@ def maybe_lock_peg(m, d, state_data):
         state_data["contact_hold_start"] = None
 
 
+def hole_search_wiggle_offsets(t, roll_deg=2.0, pitch_deg=2.0, freq=1.5, xy_amp=0.0003):
+    w = 2.0 * np.pi * freq
+
+    droll = roll_deg * np.sin(w * t)
+    dpitch = pitch_deg * np.sin(w * t + np.pi / 2.0)
+
+    dx = xy_amp * np.sin(w * t)
+    dy = xy_amp * np.sin(w * t + np.pi / 2.0)
+
+    return dx, dy, droll, dpitch
+
+
 def get_target_by_state(state_data):
     base_rpy = np.array([90.0, 0.0, 0.0])
 
@@ -484,18 +485,23 @@ def get_target_by_state(state_data):
         gripper_cmd = 0.000
 
     elif state == STATE_HOLE_SEARCH:
-        search_xy = spiral_xy_offset(
+        dx, dy, droll, dpitch = hole_search_wiggle_offsets(
             tau,
-            state_data["search_radius_rate"],
-            state_data["search_radius_max"],
-            state_data["search_omega"]
+            roll_deg=state_data["hole_search_wiggle_roll_deg"],
+            pitch_deg=state_data["hole_search_wiggle_pitch_deg"],
+            freq=state_data["hole_search_wiggle_freq"],
+            xy_amp=state_data["hole_search_xy_amp"]
         )
+
         desired_xpos_site = entry_target.copy()
-        desired_xpos_site[:2] += search_xy[:2]
+        desired_xpos_site[0] += dx
+        desired_xpos_site[1] += dy
         desired_xpos_site[2] = max(
             bottom_target[2],
-            state_data["phase_start_pos"][2] - state_data["search_down_speed"] * tau
+            state_data["phase_start_pos"][2] - state_data["hole_search_down_speed"] * tau
         )
+
+        desired_rpy = base_rpy + np.array([droll, dpitch, 0.0])
         control_site_name = "grasp_center"
         gripper_cmd = 0.000
 
@@ -503,7 +509,7 @@ def get_target_by_state(state_data):
         desired_xpos_site = entry_target.copy()
         desired_xpos_site[2] = max(
             bottom_target[2],
-            state_data["phase_start_pos"][2] - state_data["search_down_speed"] * tau
+            state_data["phase_start_pos"][2] - state_data["hole_search_down_speed"] * tau
         )
         desired_rpy = base_rpy + np.array([
             state_data["wiggle_amp_deg"] * np.sin(2.0 * np.pi * state_data["wiggle_freq"] * tau),
@@ -517,7 +523,7 @@ def get_target_by_state(state_data):
         desired_xpos_site = entry_target.copy()
         desired_xpos_site[2] = max(
             bottom_target[2],
-            state_data["phase_start_pos"][2] - state_data["search_down_speed"] * tau
+            state_data["phase_start_pos"][2] - state_data["hole_search_down_speed"] * tau
         )
         desired_rpy = base_rpy + np.array([
             0.0,
@@ -573,7 +579,7 @@ def update_state(m, d, state_data):
 
     dt = max(1e-6, now - state_data["prev_time"])
     tcp_vel = compute_tcp_velocity(grasp_center, prev_grasp_center, dt)
-    vz_down = -tcp_vel[2]                 # 아래로 갈수록 +
+    vz_down = -tcp_vel[2]   # 아래로 갈수록 +
     vxy = np.linalg.norm(tcp_vel[:2])
     effort = torque_effort_norm(state_data)
 
@@ -599,8 +605,11 @@ def update_state(m, d, state_data):
                 set_state(STATE_LIFT, state_data, d, now)
 
     elif state == STATE_LIFT:
-        err = np.linalg.norm(grasp_center - state_data["lift_target"])
-        if err < 0.005:
+        err_vec = grasp_center - state_data["lift_target"]
+        err_xy = np.linalg.norm(err_vec[:2])
+        err_z = abs(err_vec[2])
+
+        if err_z < 0.005 and err_xy < 0.010:
             print("[STATE] LIFT -> MOVE_PREINSERT")
             set_state(STATE_MOVE_PREINSERT, state_data, d, now)
 
@@ -611,7 +620,6 @@ def update_state(m, d, state_data):
             set_state(STATE_CONTACT_APPROACH, state_data, d, now)
 
     elif state == STATE_CONTACT_APPROACH:
-        # 내려가라고 명령하는데 실제 하강속도 거의 없고 effort가 크면 접촉
         contact_stuck = (
             tau > state_data["contact_min_time"] and
             vz_down < state_data["contact_vz_thresh"] and
@@ -632,7 +640,6 @@ def update_state(m, d, state_data):
             set_state(STATE_HOLE_SEARCH, state_data, d, now)
 
     elif state == STATE_HOLE_SEARCH:
-        # 1) 실제 hole로 들어가기 시작하면 INSERT_FINAL
         hole_found = (vz_down > state_data["hole_found_vz_thresh"])
 
         if hole_found:
@@ -648,30 +655,9 @@ def update_state(m, d, state_data):
             print("[STATE] HOLE_SEARCH -> INSERT_FINAL")
             set_state(STATE_INSERT_FINAL, state_data, d, now)
 
-        else:
-            # 2) search 명령은 주는데 거의 안 움직이고 effort가 크면 WIGGLE
-            stuck = (
-                vz_down < state_data["stall_vz_thresh"] and
-                vxy < state_data["stall_vxy_thresh"] and
-                effort > state_data["stall_effort_thresh"]
-            )
-
-            if stuck:
-                if state_data["stall_start_time"] is None:
-                    state_data["stall_start_time"] = now
-            else:
-                state_data["stall_start_time"] = None
-
-            if (
-                state_data["stall_start_time"] is not None and
-                now - state_data["stall_start_time"] > state_data["stall_hold_time"]
-            ):
-                print("[STATE] HOLE_SEARCH -> WIGGLE")
-                set_state(STATE_WIGGLE, state_data, d, now)
-
-            elif tau > state_data["search_timeout"]:
-                print("[STATE] HOLE_SEARCH -> RETREAT (timeout)")
-                set_state(STATE_RETREAT, state_data, d, now)
+        elif tau > state_data["hole_search_timeout"]:
+            print("[STATE] HOLE_SEARCH -> RETREAT (timeout)")
+            set_state(STATE_RETREAT, state_data, d, now)
 
     elif state == STATE_WIGGLE:
         if tau > state_data["wiggle_time"]:
@@ -739,7 +725,7 @@ def resolve_model_path():
     if local_path.exists():
         return str(local_path)
 
-    return "/home/chu/manipulator_control/rb5/scene_rb5_gripper.xml"
+    return "/home/chu/manipulator_control/rb5/pick_and_place/scene_rb5_gripper.xml"
 
 
 def main():
@@ -754,8 +740,8 @@ def main():
     peg_qpos_adr, peg_qvel_adr = get_peg_freejoint_addrs(m)
 
     # 게인
-    K_a = np.array([50.0, 50.0, 35.0])
-    zeta_a = np.array([9.0, 9.0, 4.0])
+    K_a = np.array([60.0, 60.0, 35.0])
+    zeta_a = np.array([8.0, 8.0, 4.0])
 
     K_o = np.array([3.0, 3.0, 1.5])
     zeta_o = np.array([0.3, 0.3, 0.2])
@@ -843,12 +829,17 @@ def main():
 
         "preinsert_extra_z": 0.03,
 
-        "touch_down_speed": 0.010,      # m/s
-        "search_down_speed": 0.003,     # m/s
-        "search_radius_rate": 0.0020,   # m/s
-        "search_radius_max": 0.0035,    # 3.5 mm
-        "search_omega": 2.0 * np.pi * 1.5,
+        "touch_down_speed": 0.010,
 
+        # contact 후 hole-search(wiggle search)
+        "hole_search_down_speed": 0.0010,
+        "hole_search_wiggle_roll_deg": 2.0,
+        "hole_search_wiggle_pitch_deg": 2.0,
+        "hole_search_wiggle_freq": 1.5,
+        "hole_search_xy_amp": 0.0003,
+        "hole_search_timeout": 1.5,
+
+        # 아래 두 상태는 현재 FSM에서 직접 사용하지 않지만 남겨둠
         "wiggle_amp_deg": 3.0,
         "wiggle_freq": 2.0,
         "wiggle_time": 1.0,
@@ -868,14 +859,8 @@ def main():
         "stall_start_time": None,
         "hole_found_start_time": None,
 
-        "stall_vz_thresh": 0.0010,      # m/s
-        "stall_vxy_thresh": 0.0020,     # m/s
-        "stall_effort_thresh": 12.0,
-        "stall_hold_time": 0.15,
-
-        "hole_found_vz_thresh": 0.0030,  # 아래로 실제 들어가기 시작
+        "hole_found_vz_thresh": 0.0020,
         "hole_found_hold_time": 0.08,
-        "search_timeout": 2.0,
 
         "phase_start_pos": initial_grasp_center.copy(),
         "prev_grasp_center": initial_grasp_center.copy(),

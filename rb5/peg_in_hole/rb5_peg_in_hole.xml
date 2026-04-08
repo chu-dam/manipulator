@@ -1,0 +1,138 @@
+<mujoco model="rb5_850e_peg_in_hole">
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.001"
+          integrator="implicit"
+          gravity="0 0 -9.81"
+          solver="Newton"
+          iterations="200"
+          ls_iterations="100"
+          noslip_iterations="8"
+          impratio="10"
+          ccd_iterations="100"
+          ccd_tolerance="1e-8">
+    <flag multiccd="enable" nativeccd="enable"/>
+  </option>
+
+  <asset>
+    <mesh name="link0_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link0.stl"/>
+    <mesh name="link1_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link1.stl"/>
+    <mesh name="link2_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link2.stl"/>
+    <mesh name="link3_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link3.stl"/>
+    <mesh name="link4_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link4.stl"/>
+    <mesh name="link5_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link5.stl"/>
+    <mesh name="link6_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link6.stl"/>
+  </asset>
+
+  <default class="main">
+    <geom type="mesh" group="0" contype="1" conaffinity="2"/>
+    <joint type="hinge" damping="0.1" armature="0.001"/>
+  </default>
+
+  <worldbody>
+    <geom name="ground" type="plane" pos="0 0 0" size="5 5 0.1"
+          rgba="0.5 0.5 0.5 1"
+          friction="1 0.005 0.0001"
+          contype="2" conaffinity="1"
+          margin="0.001"/>
+
+    <body name="link0" pos="0 0 0">
+      <geom type="mesh" mesh="link0_mesh"/>
+
+      <body name="link1" pos="0 0 0.1692" childclass="main">
+        <inertial pos="5.7e-05 -0.005795 -0.034516"
+                  quat="0.676677 0.181125 -0.183239 0.689729"
+                  mass="4.147"
+                  diaginertia="0.00940157 0.00878691 0.0073332"/>
+        <joint name="base" axis="0 0 1" range="-3.14 3.14"/>
+        <geom type="mesh" mesh="link1_mesh"/>
+
+        <body name="link2" pos="0 0 0" childclass="main">
+          <inertial pos="-3.7e-05 -0.121603 0.212933"
+                    quat="0.999997 0.000348233 7.80187e-05 -0.00223104"
+                    mass="9.633"
+                    diaginertia="0.392214 0.388915 0.0219492"/>
+          <joint name="shoulder" axis="0 1 0" range="-3.14 3.14"/>
+          <geom type="mesh" mesh="link2_mesh"/>
+
+          <body name="link3" pos="0 0 0.425" childclass="main">
+            <inertial pos="2.1e-05 -0.015845 0.202568"
+                      quat="0.999948 0.0100341 -5.40187e-05 -0.00170427"
+                      mass="3.915"
+                      diaginertia="0.11204 0.111832 0.0075271"/>
+            <joint name="elbow" axis="0 1 0" range="-3.14 3.14"/>
+            <geom type="mesh" mesh="link3_mesh"/>
+
+            <body name="link4" pos="0 0 0.392" childclass="main">
+              <inertial pos="5.7e-05 -0.106332 0.025881"
+                        quat="0.986693 0.162394 -0.00142514 0.00799378"
+                        mass="1.452"
+                        diaginertia="0.00162904 0.00160108 0.00118182"/>
+              <joint name="wrist1" axis="0 1 0" range="-3.14 3.14"/>
+              <geom type="mesh" mesh="link4_mesh"/>
+
+              <body name="link5" pos="0 -0.1107 0.1107" childclass="main">
+                <inertial pos="-2.8e-05 -0.025911 -0.004363"
+                          quat="0.812497 0.582798 -0.00662653 0.0123056"
+                          mass="1.454"
+                          diaginertia="0.00163147 0.00160354 0.00118381"/>
+                <joint name="wrist2" axis="0 0 1" range="-3.14 3.14"/>
+                <geom type="mesh" mesh="link5_mesh"/>
+
+                <body name="link6" pos="0 0 0" childclass="main">
+                  <inertial pos="-2e-06 -0.079964 -0.000494"
+                            quat="0.706709 -0.0427371 -0.0387873 0.705146"
+                            mass="0.243"
+                            diaginertia="0.000243707 0.000147897 0.000142261"/>
+                  <joint name="wrist3" axis="0 1 0" range="-3.14 3.14"/>
+                  <geom type="mesh" mesh="link6_mesh"/>
+
+                  <!-- tool mount at former tool flange position -->
+                  <body name="tool_mount" pos="0 -0.0967 0">
+                    <inertial pos="0 -0.025 0"
+                              mass="0.60"
+                              diaginertia="0.00050 0.00040 0.00040"/>
+
+                    <!-- peg is fixed directly to the end-effector.
+                         local -Y is insertion direction.
+                         diameter = 50 mm, length = 50 mm -->
+                    <geom name="peg_geom"
+                          type="cylinder"
+                          fromto="0 0 0   0 -0.050 0"
+                          size="0.0249"
+                          mass="0.20"
+                          rgba="1 0 0 1"
+                          contype="1"
+                          conaffinity="3"
+                          margin="0.0005"
+                          friction="1.2 0.01 0.0001"/>
+
+                    <!-- reference sites -->
+                    <site name="tcp"          pos="0  0.000 0" size="0.004"  rgba="1 0 0 1"/>
+                    <site name="grasp_center" pos="0  0.000 0" size="0.004"  rgba="0 1 0 1"/>
+                    <site name="peg_base"     pos="0  0.000 0" size="0.004"  rgba="1 0 0 1"/>
+                    <site name="peg_center"   pos="0 -0.025 0" size="0.004"  rgba="0 1 0 1"/>
+                    <site name="peg_tip"      pos="0 -0.050 0" size="0.005"  rgba="0 0 1 0"/>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="base_motor" joint="base" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="shoulder_motor" joint="shoulder" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="elbow_motor" joint="elbow" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="wrist1_motor" joint="wrist1" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="wrist2_motor" joint="wrist2" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+    <motor name="wrist3_motor" joint="wrist3" ctrllimited="true" ctrlrange="-100 100" gear="1"/>
+  </actuator>
+
+  <keyframe>
+    <key name="home" qpos="-0.5 0.0 1.0 0.0 0.0 0.0"/>
+  </keyframe>
+</mujoco>

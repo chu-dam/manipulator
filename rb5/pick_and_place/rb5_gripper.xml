@@ -1,7 +1,18 @@
 <mujoco model="rb5_850e_gripper">
   <compiler angle="radian" autolimits="true"/>
 
-  <option timestep="0.002" integrator="implicit" gravity="0 0 -9.81"/>
+  <option timestep="0.001"
+          integrator="implicit"
+          gravity="0 0 -9.81"
+          solver="Newton"
+          iterations="200"
+          ls_iterations="100"
+          noslip_iterations="8"
+          impratio="10"
+          ccd_iterations="100"
+          ccd_tolerance="1e-8">
+    <flag multiccd="enable" nativeccd="enable"/>
+  </option>
 
   <asset>
     <mesh name="link0_mesh" file="/home/chu/manipulator_control/rbpodo_ros2/rbpodo_description/meshes/rb5_850e/collision/link0.stl"/>
@@ -28,7 +39,8 @@
     <geom name="ground" type="plane" pos="0 0 0" size="5 5 0.1"
           rgba="0.5 0.5 0.5 1"
           friction="1 0.005 0.0001"
-          contype="2" conaffinity="1"/>
+          contype="2" conaffinity="1"
+          margin="0.001"/>
 
     <body name="link0" pos="0 0 0">
       <geom type="mesh" mesh="link0_mesh"/>
@@ -83,7 +95,6 @@
 
                   <!-- =====================================================
                        Gripper base
-                       기존 tcp_frame 위치를 gripper mount로 사용
                        ===================================================== -->
                   <body name="gripper_base" pos="0 -0.0967 0">
                     <inertial pos="0 -0.018 0"
@@ -98,7 +109,8 @@
                           mass="0.30"
                           rgba="0.18 0.18 0.18 1"
                           contype="1" conaffinity="2"
-                          friction="1.0 0.005 0.0001"/>
+                          friction="1.0 0.005 0.0001"
+                          margin="0.001"/>
 
                     <!-- guide block -->
                     <geom name="gripper_nose"
@@ -108,7 +120,8 @@
                           mass="0.05"
                           rgba="0.25 0.25 0.25 1"
                           contype="1" conaffinity="2"
-                          friction="1.0 0.005 0.0001"/>
+                          friction="1.0 0.005 0.0001"
+                          margin="0.001"/>
 
                     <!-- left finger -->
                     <body name="left_finger" pos="0.004 -0.052 0">
@@ -129,7 +142,8 @@
                             mass="0.05"
                             rgba="0.35 0.35 0.35 1"
                             contype="1" conaffinity="2"
-                            friction="1.2 0.01 0.0001"/>
+                            friction="1.2 0.01 0.0001"
+                            margin="0.0007"/>
 
                       <geom name="left_pad"
                             type="box"
@@ -138,7 +152,8 @@
                             mass="0.01"
                             rgba="0.1 0.1 0.1 1"
                             contype="1" conaffinity="2"
-                            friction="2.0 0.02 0.0002"/>
+                            friction="2.0 0.02 0.0002"
+                            margin="0.0005"/>
                     </body>
 
                     <!-- right finger -->
@@ -160,7 +175,8 @@
                             mass="0.05"
                             rgba="0.35 0.35 0.35 1"
                             contype="1" conaffinity="2"
-                            friction="1.2 0.01 0.0001"/>
+                            friction="1.2 0.01 0.0001"
+                            margin="0.0007"/>
 
                       <geom name="right_pad"
                             type="box"
@@ -169,14 +185,11 @@
                             mass="0.01"
                             rgba="0.1 0.1 0.1 1"
                             contype="1" conaffinity="2"
-                            friction="2.0 0.02 0.0002"/>
+                            friction="2.0 0.02 0.0002"
+                            margin="0.0005"/>
                     </body>
 
-                    <!-- =====================================================
-                         Robot-side reference sites
-                         free peg를 잡을 때 기준점으로 사용
-                         hidden 처리
-                         ===================================================== -->
+                    <!-- hidden reference sites -->
                     <site name="tcp"
                           pos="0 -0.070 0"
                           size="0.0001"
@@ -215,9 +228,9 @@
               joint="grip_left"
               ctrllimited="true"
               ctrlrange="0 0.012"
-              kp="2500"
+              kp="800"
               forcelimited="true"
-              forcerange="-80 80"/>
+              forcerange="-20 20"/>
   </actuator>
 
   <keyframe>
