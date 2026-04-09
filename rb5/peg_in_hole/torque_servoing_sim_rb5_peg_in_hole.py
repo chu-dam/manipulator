@@ -1,5 +1,4 @@
 from time import time
-from copy import deepcopy
 from pathlib import Path
 
 import mujoco
@@ -28,6 +27,18 @@ STATE_INSERT_FINAL = 3
 STATE_RETREAT = 4
 STATE_DONE = 5
 
+
+# =========================
+# Target randomization
+# =========================
+RANDOMIZE_TARGET_XY = True
+TARGET_RANDOM_RADIUS_MM = 7.0
+RANDOM_SEED = None
+
+
+# =========================
+# Viewer
+# =========================
 VIEW_HOLE = True
 
 
@@ -93,7 +104,7 @@ def validate_required_sites(model):
 
 
 def initialize_robot_state(model, data):
-    _ = model  # interface 유지용
+    _ = model
     data.qpos[:6] = [-0.5, 0.0, 1.0, 0.0, 0.0, 0.0]
     data.qvel[:] = 0.0
 
@@ -145,8 +156,8 @@ def compute_task_torque(
     site_id = model.site(site_name).id
     mujoco.mj_jacSite(model, data, jacp, jacr, site_id)
 
-    jacp0 = deepcopy(jacp[:, 0:6])
-    jacr0 = deepcopy(jacr[:, 0:6])
+    jacp0 = jacp[:, 0:6].copy()
+    jacr0 = jacr[:, 0:6].copy()
 
     xpos_err = data.site(site_name).xpos - desired_xpos_site
     xpos_err = xpos_err * pos_task_axis_mask
@@ -179,10 +190,9 @@ def compute_task_torque(
     f_pos_task = f_pos_task * pos_task_axis_mask
 
     torque = (
-        -0.0 * c_joint @ data.qvel[0:6]
-        -1.0 * jacp0.T @ f_pos_task
-        +1.0 * gravity[0:6]
-        -1.0 * jacr0.T @ f_ori
+        - jacp0.T @ f_pos_task
+        + gravity[0:6]
+        - jacr0.T @ f_ori
     )
     return torque
 
@@ -217,16 +227,66 @@ def compute_velocity(curr_pos, prev_pos, dt):
     return (curr_pos - prev_pos) / dt
 
 
-def hole_search_wiggle_offsets(elapsed_time, roll_deg=1.0, pitch_deg=1.0, freq=1.0, xy_amp=0.0):
+def hole_search_wiggle_offsets(
+    elapsed_time,
+    roll_deg=1.0,
+    pitch_deg=1.0,
+    freq=1.0,
+    xy_amp=0.0,
+    decay_time=1.5,
+):
+    if freq <= 0.0:
+        return 0.0, 0.0, 0.0, 0.0
+
     omega = 2.0 * np.pi * freq
+    one_cycle_time = 1.0 / freq
 
-    droll = roll_deg * np.sin(omega * elapsed_time)
-    dpitch = pitch_deg * np.sin(omega * elapsed_time + np.pi / 2.0)
+    # 한 바퀴 돈 뒤부터 decay 시작
+    if elapsed_time <= one_cycle_time:
+        amp_scale = 1.0
+    else:
+        decay_elapsed = elapsed_time - one_cycle_time
+        amp_scale = max(0.0, 1.0 - decay_elapsed / decay_time)
 
-    dx = xy_amp * np.sin(omega * elapsed_time)
-    dy = xy_amp * np.sin(omega * elapsed_time + np.pi / 2.0)
+    droll = amp_scale * roll_deg * np.sin(omega * elapsed_time)
+    dpitch = amp_scale * pitch_deg * np.sin(omega * elapsed_time + np.pi / 2.0)
+
+    dx = amp_scale * xy_amp * np.sin(omega * elapsed_time)
+    dy = amp_scale * xy_amp * np.sin(omega * elapsed_time + np.pi / 2.0)
 
     return dx, dy, droll, dpitch
+
+
+def sample_random_xy_bias(radius_mm, rng):
+    if radius_mm <= 0.0:
+        return np.zeros(3, dtype=np.float64)
+
+    radius_m = radius_mm * 1e-3
+
+    # 원 내부 균일 샘플링
+    r = radius_m * np.sqrt(rng.uniform(0.0, 1.0))
+    theta = rng.uniform(0.0, 2.0 * np.pi)
+
+    dx = r * np.cos(theta)
+    dy = r * np.sin(theta)
+
+    return np.array([dx, dy, 0.0], dtype=np.float64)
+
+
+def build_biased_hole_targets(data, rng):
+    hole_preinsert_world = data.site("hole_preinsert").xpos.copy()
+    hole_entry_world = data.site("hole_entry").xpos.copy()
+    hole_bottom_world = data.site("hole_bottom").xpos.copy()
+
+    target_xy_bias = np.zeros(3, dtype=np.float64)
+    if RANDOMIZE_TARGET_XY:
+        target_xy_bias = sample_random_xy_bias(TARGET_RANDOM_RADIUS_MM, rng)
+
+    hole_preinsert_world = hole_preinsert_world + target_xy_bias
+    hole_entry_world = hole_entry_world + target_xy_bias
+    hole_bottom_world = hole_bottom_world + target_xy_bias
+
+    return hole_preinsert_world, hole_entry_world, hole_bottom_world, target_xy_bias
 
 
 def set_state(new_state, state_data, data, now):
@@ -235,6 +295,9 @@ def set_state(new_state, state_data, data, now):
     state_data["phase_start_pos"] = data.site("peg_tip").xpos.copy()
     state_data["hole_found_start_time"] = None
     state_data["insert_final_stall_start_time"] = None
+
+    if new_state == STATE_MOVE_PREINSERT:
+        state_data["contact_stall_z"] = None
 
     if new_state == STATE_RETREAT:
         current_tip = data.site("peg_tip").xpos.copy()
@@ -279,6 +342,7 @@ def get_target_by_state(state_data):
             pitch_deg=state_data["hole_search_wiggle_pitch_deg"],
             freq=state_data["hole_search_wiggle_freq"],
             xy_amp=state_data["hole_search_xy_amp"],
+            decay_time=state_data["hole_search_timeout"],
         )
 
         desired_xpos_site = hole_entry.copy()
@@ -301,7 +365,7 @@ def get_target_by_state(state_data):
     elif state == STATE_RETREAT:
         desired_xpos_site = state_data["retreat_target"].copy()
 
-    else:  # STATE_DONE or fallback
+    else:
         desired_xpos_site = state_data["done_hold_target"].copy()
 
     return desired_xpos_site, desired_rpy, control_site_name
@@ -338,7 +402,8 @@ def update_state(data, state_data):
 
     elif state == STATE_CONTACT_APPROACH:
         if near_hole_top and tip_vz_abs < state_data["contact_stall_v_thresh_mps"]:
-            print("[STATE] CONTACT_APPROACH -> HOLE_SEARCH")
+            state_data["contact_stall_z"] = peg_tip[2]
+            print(f"[STATE] CONTACT_APPROACH -> HOLE_SEARCH (stall_z={state_data['contact_stall_z']:.6f})")
             set_state(STATE_HOLE_SEARCH, state_data, data, now)
 
         elif below_hole_top_10mm:
@@ -350,37 +415,38 @@ def update_state(data, state_data):
                 set_state(STATE_INSERT_FINAL, state_data, data, now)
 
     elif state == STATE_HOLE_SEARCH:
-        hole_found = (
-            tip_vz_down > state_data["hole_found_vz_thresh"] and
-            tip_xy_err_entry < state_data["hole_found_xy_thresh"] and
-            peg_tip[2] < (hole_entry[2] - state_data["hole_found_z_margin"])
-        )
+        freq = state_data["hole_search_wiggle_freq"]
+        one_cycle_time = (1.0 / freq) if freq > 0.0 else 0.0
+        decay_end_time = one_cycle_time + state_data["hole_search_timeout"]
 
-        if hole_found:
-            if state_data["hole_found_start_time"] is None:
-                state_data["hole_found_start_time"] = now
-        else:
-            state_data["hole_found_start_time"] = None
+        if elapsed_time >= decay_end_time:
+            contact_stall_z = state_data["contact_stall_z"]
 
-        if (
-            state_data["hole_found_start_time"] is not None and
-            now - state_data["hole_found_start_time"] > state_data["hole_found_hold_time"]
-        ):
-            print("[STATE] HOLE_SEARCH -> INSERT_FINAL")
-            set_state(STATE_INSERT_FINAL, state_data, data, now)
+            if contact_stall_z is None:
+                print("[STATE] HOLE_SEARCH -> RETREAT (contact_stall_z is None)")
+                set_state(STATE_RETREAT, state_data, data, now)
+            else:
+                lowered_enough = peg_tip[2] < (contact_stall_z - state_data["hole_search_success_z_margin"])
 
-        elif elapsed_time > state_data["hole_search_timeout"]:
-            print("[STATE] HOLE_SEARCH -> RETREAT (timeout)")
-            set_state(STATE_RETREAT, state_data, data, now)
+                if lowered_enough:
+                    print(
+                        "[STATE] HOLE_SEARCH -> INSERT_FINAL "
+                        f"(stall_z={contact_stall_z:.6f}, current_z={peg_tip[2]:.6f})"
+                    )
+                    set_state(STATE_INSERT_FINAL, state_data, data, now)
+                else:
+                    print(
+                        "[STATE] HOLE_SEARCH -> RETREAT "
+                        f"(stall_z={contact_stall_z:.6f}, current_z={peg_tip[2]:.6f})"
+                    )
+                    set_state(STATE_RETREAT, state_data, data, now)
 
     elif state == STATE_INSERT_FINAL:
-        # DONE 조건: peg tip z가 지면에서 6 mm 이하 도달
         if peg_tip[2] <= state_data["insert_final_done_z_m"]:
             print("[STATE] INSERT_FINAL -> DONE")
             set_state(STATE_DONE, state_data, data, now)
 
         else:
-            # stall 감시는 z > 8 mm 구간에서만 수행
             monitor_zone = peg_tip[2] > state_data["insert_final_stall_monitor_z_m"]
             stalled = tip_vz_abs < state_data["insert_final_stall_v_thresh_mps"]
 
@@ -412,11 +478,13 @@ def print_debug(data, state_data, desired_xpos_site, control_site_name, print_ev
     current_pos = data.site(control_site_name).xpos.copy()
     pos_err = current_pos - desired_xpos_site
     tau_norm = np.linalg.norm(state_data["last_tau_cmd"])
+    bias_xy = state_data["target_xy_bias"][:2] * 1000.0
 
     print(
         f"[{get_state_name(state_data['state'])} | site={control_site_name}] "
         f"POS=({current_pos[0]:.4f}, {current_pos[1]:.4f}, {current_pos[2]:.4f}) | "
         f"ERR=({pos_err[0]:.4f}, {pos_err[1]:.4f}, {pos_err[2]:.4f}) | "
+        f"bias_xy_mm=({bias_xy[0]:.2f}, {bias_xy[1]:.2f}) | "
         f"tau={tau_norm:.3f}"
     )
 
@@ -437,7 +505,6 @@ def main():
 
     mass, gravity, jacp, jacr, c_joint = create_work_buffers(model)
 
-    # Gains
     k_pos = np.array([60.0, 60.0, 35.0])
     zeta_pos = np.array([8.0, 8.0, 4.0])
 
@@ -446,10 +513,16 @@ def main():
 
     mujoco.mj_forward(model, data)
 
-    hole_preinsert_world = data.site("hole_preinsert").xpos.copy()
-    hole_entry_world = data.site("hole_entry").xpos.copy()
-    hole_bottom_world = data.site("hole_bottom").xpos.copy()
+    rng = np.random.default_rng(RANDOM_SEED)
+
+    hole_preinsert_world, hole_entry_world, hole_bottom_world, target_xy_bias = build_biased_hole_targets(data, rng)
     initial_peg_tip = data.site("peg_tip").xpos.copy()
+
+    print(
+        f"[TARGET_BIAS] dx={target_xy_bias[0] * 1000:.2f} mm, "
+        f"dy={target_xy_bias[1] * 1000:.2f} mm, "
+        f"r={np.linalg.norm(target_xy_bias[:2]) * 1000:.2f} mm"
+    )
 
     state_data = {
         "state": STATE_MOVE_PREINSERT,
@@ -461,6 +534,7 @@ def main():
         "hole_preinsert_world": hole_preinsert_world,
         "hole_entry_world": hole_entry_world,
         "hole_bottom_world": hole_bottom_world,
+        "target_xy_bias": target_xy_bias.copy(),
 
         "retreat_target": initial_peg_tip.copy(),
         "done_hold_target": initial_peg_tip.copy(),
@@ -469,11 +543,11 @@ def main():
         "touch_down_speed": 0.010,
 
         "hole_search_down_speed": 0.0005,
-        "hole_search_wiggle_roll_deg": 1.0,
-        "hole_search_wiggle_pitch_deg": 1.0,
-        "hole_search_wiggle_freq": 1.0,
+        "hole_search_wiggle_roll_deg": 10.0,
+        "hole_search_wiggle_pitch_deg": 10.0,
+        "hole_search_wiggle_freq": 0.3,
         "hole_search_xy_amp": 0.0,
-        "hole_search_timeout": 1.5,
+        "hole_search_timeout": 1.0,
 
         "hole_found_start_time": None,
         "hole_found_vz_thresh": 0.0015,
@@ -495,6 +569,9 @@ def main():
         "contact_push_below_top_m": CONTACT_PUSH_BELOW_TOP_M,
         "retreat_lift_m": RETREAT_LIFT_M,
 
+        "contact_stall_z": None,
+        "hole_search_success_z_margin": 0.0001,  # 0.1 mm
+
         "insert_final_down_speed": 0.010,
         "insert_final_target_z_m": 0.005,
         "insert_final_stall_monitor_z_m": 0.008,
@@ -506,9 +583,7 @@ def main():
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         if VIEW_HOLE:
-            # free camera를 코드에서 직접 세팅
             viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-
             hole_view = data.site("hole_entry").xpos.copy()
             viewer.cam.lookat[:] = hole_view
             viewer.cam.distance = 0.30
@@ -525,7 +600,7 @@ def main():
 
             compute_mass_and_gravity(model, data, mass, gravity)
 
-            if state_data["state"] == STATE_INSERT_FINAL:
+            if state_data["state"] in (STATE_HOLE_SEARCH, STATE_INSERT_FINAL):
                 torque = compute_task_torque(
                     model,
                     data,
