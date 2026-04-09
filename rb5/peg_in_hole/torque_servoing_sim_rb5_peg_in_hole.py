@@ -9,6 +9,8 @@ import numpy as np
 # =========================
 # User-tunable geometry / thresholds
 # =========================
+TOTAL_TRIALS = 100
+
 HOLE_TOP_HEIGHT_M = 0.040       # hole bottom 기준 top까지 높이 (40 mm)
 
 CONTACT_STALL_TOP_BAND_M = 0.005      # hole top ±5 mm
@@ -32,7 +34,7 @@ STATE_DONE = 5
 # Target randomization
 # =========================
 RANDOMIZE_TARGET_XY = True
-TARGET_RANDOM_RADIUS_MM = 7.0
+TARGET_RANDOM_RADIUS_MM = 10.0
 RANDOM_SEED = None
 
 
@@ -40,6 +42,9 @@ RANDOM_SEED = None
 # Viewer
 # =========================
 VIEW_HOLE = True
+
+
+
 
 
 def rpy_to_rotmat(roll, pitch, yaw):
@@ -488,43 +493,8 @@ def print_debug(data, state_data, desired_xpos_site, control_site_name, print_ev
         f"tau={tau_norm:.3f}"
     )
 
-
-def resolve_model_path():
-    local_path = Path(__file__).resolve().parent / "scene_rb5_peg_in_hole.xml"
-    if local_path.exists():
-        return str(local_path)
-    return "/home/chu/manipulator_control/rb5/peg_in_hole/scene_rb5_peg_in_hole.xml"
-
-
-def main():
-    model_path = resolve_model_path()
-    model, data = create_model_and_data(model_path)
-
-    validate_required_sites(model)
-    initialize_robot_state(model, data)
-
-    mass, gravity, jacp, jacr, c_joint = create_work_buffers(model)
-
-    k_pos = np.array([60.0, 60.0, 35.0])
-    zeta_pos = np.array([8.0, 8.0, 4.0])
-
-    k_ori = np.array([3.0, 3.0, 1.5])
-    zeta_ori = np.array([0.3, 0.3, 0.2])
-
-    mujoco.mj_forward(model, data)
-
-    rng = np.random.default_rng(RANDOM_SEED)
-
-    hole_preinsert_world, hole_entry_world, hole_bottom_world, target_xy_bias = build_biased_hole_targets(data, rng)
-    initial_peg_tip = data.site("peg_tip").xpos.copy()
-
-    print(
-        f"[TARGET_BIAS] dx={target_xy_bias[0] * 1000:.2f} mm, "
-        f"dy={target_xy_bias[1] * 1000:.2f} mm, "
-        f"r={np.linalg.norm(target_xy_bias[:2]) * 1000:.2f} mm"
-    )
-
-    state_data = {
+def build_state_data(initial_peg_tip, hole_preinsert_world, hole_entry_world, hole_bottom_world, target_xy_bias):
+    return {
         "state": STATE_MOVE_PREINSERT,
         "state_enter_time": 0.0,
         "time_now": 0.0,
@@ -555,6 +525,13 @@ def main():
         "hole_found_z_margin": 0.0005,
         "hole_found_hold_time": 0.08,
 
+        "hole_search_verify_duration": 3.0,
+        "hole_search_verify_min_drop": 0.0004,
+        "hole_search_verify_vz_thresh": 0.0005,
+
+        "hole_search_verify_start_time": None,
+        "hole_search_verify_start_z": None,
+
         "retreat_tol": 0.005,
 
         "phase_start_pos": initial_peg_tip.copy(),
@@ -570,7 +547,7 @@ def main():
         "retreat_lift_m": RETREAT_LIFT_M,
 
         "contact_stall_z": None,
-        "hole_search_success_z_margin": 0.0001,  # 0.1 mm
+        "hole_search_success_z_margin": 0.0001,
 
         "insert_final_down_speed": 0.010,
         "insert_final_target_z_m": 0.005,
@@ -581,6 +558,61 @@ def main():
         "insert_final_done_z_m": 0.006,
     }
 
+
+def reset_trial(model, data, rng):
+    mujoco.mj_resetData(model, data)
+    initialize_robot_state(model, data)
+    mujoco.mj_forward(model, data)
+
+    hole_preinsert_world, hole_entry_world, hole_bottom_world, target_xy_bias = build_biased_hole_targets(data, rng)
+    initial_peg_tip = data.site("peg_tip").xpos.copy()
+
+    print(
+        f"[TARGET_BIAS] dx={target_xy_bias[0] * 1000:.2f} mm, "
+        f"dy={target_xy_bias[1] * 1000:.2f} mm, "
+        f"r={np.linalg.norm(target_xy_bias[:2]) * 1000:.2f} mm"
+    )
+
+    state_data = build_state_data(
+        initial_peg_tip,
+        hole_preinsert_world,
+        hole_entry_world,
+        hole_bottom_world,
+        target_xy_bias,
+    )
+
+    return state_data
+
+
+def resolve_model_path():
+    local_path = Path(__file__).resolve().parent / "scene_rb5_peg_in_hole.xml"
+    if local_path.exists():
+        return str(local_path)
+    return "/home/chu/manipulator_control/rb5/peg_in_hole/scene_rb5_peg_in_hole.xml"
+
+
+def main():
+    model_path = resolve_model_path()
+    model, data = create_model_and_data(model_path)
+
+    validate_required_sites(model)
+    initialize_robot_state(model, data)
+
+    mass, gravity, jacp, jacr, c_joint = create_work_buffers(model)
+
+    k_pos = np.array([60.0, 60.0, 35.0])
+    zeta_pos = np.array([8.0, 8.0, 4.0])
+
+    k_ori = np.array([3.0, 3.0, 1.5])
+    zeta_ori = np.array([0.3, 0.3, 0.2])
+
+    mujoco.mj_forward(model, data)
+
+    rng = np.random.default_rng(RANDOM_SEED)
+
+    trial_idx = 1
+    state_data = reset_trial(model, data, rng)
+
     with mujoco.viewer.launch_passive(model, data) as viewer:
         if VIEW_HOLE:
             viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
@@ -590,6 +622,7 @@ def main():
             viewer.cam.azimuth = 160.0
             viewer.cam.elevation = -20.0
 
+        print(f"\n========== TRIAL {trial_idx}/{TOTAL_TRIALS} ==========\n")
         t0 = time()
 
         while viewer.is_running():
@@ -639,10 +672,40 @@ def main():
             apply_control(data, torque, max_torque=80)
             state_data["last_tau_cmd"] = data.ctrl[0:6].copy()
 
+            prev_state = state_data["state"]
+
             mujoco.mj_step(model, data)
 
             print_debug(data, state_data, desired_xpos_site, control_site_name, print_every=0.1)
             update_state(data, state_data)
+
+            curr_state = state_data["state"]
+
+            # trial 종료 조건
+            trial_finished = False
+
+            # 성공: DONE 도달
+            if curr_state == STATE_DONE:
+                trial_finished = True
+
+            # 실패: RETREAT가 끝나서 다시 MOVE_PREINSERT로 복귀
+            elif prev_state == STATE_RETREAT and curr_state == STATE_MOVE_PREINSERT:
+                trial_finished = True
+
+            if trial_finished:
+                if trial_idx >= TOTAL_TRIALS:
+                    print("\n========== ALL TRIALS FINISHED ==========\n")
+                    viewer.sync()
+                    break
+
+                trial_idx += 1
+                print(f"\n========== TRIAL {trial_idx}/{TOTAL_TRIALS} ==========\n")
+
+                state_data = reset_trial(model, data, rng)
+                t0 = time()
+
+                viewer.sync()
+                continue
 
             viewer.sync()
             state_data["prev_time"] = now
